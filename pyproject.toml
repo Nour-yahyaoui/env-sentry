@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "env-sentry"
+version = "0.1.4"
+description = "A tiny, zero-dependency CLI that keeps your .env setup safe and in sync."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "nour yahyaoui" }]
+keywords = ["env", "dotenv", "security", "secrets", "cli", "devtools"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Security",
+]
+
+[project.urls]
+Homepage = "https://github.com/nour-yahyaoui/env-sentry"
+Issues = "https://github.com/nour-yahyaoui/env-sentry/issues"
+
+[project.scripts]
+env-sentry = "env_sentry.cli:main"
+
+[tool.setuptools]
+packages = ["env_sentry"]
