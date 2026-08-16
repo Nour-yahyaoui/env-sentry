@@ -42,3 +42,37 @@ def test_scan_detects_known_pattern(tmp_path: Path):
     result = run(["scan", "."], cwd=tmp_path)
     assert result.returncode == 1
     assert "AWS Access Key" in result.stdout
+
+
+def test_scan_ignores_token_count_variables(tmp_path: Path):
+    (tmp_path / "config.py").write_text(
+        "max_tokens = 4096\n"
+        "use_token_streaming = True\n"
+        "delta_tokens_seen = 128000\n"
+        "a_tokens, b_tokens = split_tokens(text)\n"
+    )
+
+    result = run(["scan", "."], cwd=tmp_path)
+    assert result.returncode == 0
+    assert "Suspicious value" not in result.stdout
+
+
+def test_scan_ignores_non_literal_values(tmp_path: Path):
+    (tmp_path / "config.py").write_text(
+        'ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")\n'
+        "ANTHROPIC_AUTH_TOKEN = get_token_from_vault()\n"
+    )
+
+    result = run(["scan", "."], cwd=tmp_path)
+    assert result.returncode == 0
+    assert "Suspicious value" not in result.stdout
+
+
+def test_scan_still_flags_real_hardcoded_secret(tmp_path: Path):
+    (tmp_path / "config.py").write_text(
+        'STRIPE_SECRET_KEY = "sk_test_reallyLongHardcodedSecretValue123456"\n'
+    )
+
+    result = run(["scan", "."], cwd=tmp_path)
+    assert result.returncode == 1
+    assert "STRIPE_SECRET_KEY" in result.stdout

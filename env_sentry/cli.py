@@ -17,7 +17,7 @@ import re
 import sys
 from pathlib import Path
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 
 # ----------------------------------------------------------------------
 # .env parsing helpers
@@ -160,7 +160,12 @@ PLACEHOLDER_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Well-known secret formats worth flagging outright.
+# Key names that mention "token" but are almost always counts/flags, not secrets
+# (e.g. max_tokens, use_token, delta_tokens, a_tokens) — not credentials.
+TOKEN_COUNT_RE = re.compile(
+    r"(max|min|num|count|total|limit|delta|use|avg|is|has)[_-]?tokens?\b",
+    re.IGNORECASE,
+)
 KNOWN_PATTERNS = {
     "AWS Access Key": re.compile(r"AKIA[0-9A-Z]{16}"),
     "GitHub Token": re.compile(r"gh[pousr]_[A-Za-z0-9]{36,}"),
@@ -182,25 +187,35 @@ SCANNABLE_EXTENSIONS = {
 }
 
 
-def looks_like_secret(key: str, value: str) -> bool:
+def looks_like_secret(key: str, value: str, is_literal: bool = True) -> bool:
     if not value or PLACEHOLDER_RE.match(value):
         return False
     if len(value) < 12:
         return False
+    if TOKEN_COUNT_RE.search(key):
+        return False
     if not SECRET_KEY_HINTS.search(key):
+        return False
+    if not is_literal:
+        return False
+    if value.replace(".", "", 1).isdigit():
         return False
     return True
 
 
-def scan_line(line: str) -> list[str]:
+def scan_line(line: str, is_env_file: bool = False) -> list[str]:
     findings = []
     for name, pattern in KNOWN_PATTERNS.items():
         if pattern.search(line):
             findings.append(name)
     match = _KV_RE.match(line)
     if match:
-        key, val = match.group(1), match.group(2).strip().strip("'\"")
-        if looks_like_secret(key, val):
+        key, raw_val = match.group(1), match.group(2).strip()
+        is_literal = is_env_file or (
+            len(raw_val) >= 2 and raw_val[0] == raw_val[-1] and raw_val[0] in ("'", '"')
+        )
+        val = raw_val.strip("'\"")
+        if looks_like_secret(key, val, is_literal=is_literal):
             findings.append(f"Suspicious value for '{key}'")
     return findings
 
@@ -219,8 +234,9 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 lines = file_path.read_text(errors="ignore").splitlines()
             except (UnicodeDecodeError, OSError):
                 continue
+            is_env_file = filename == ".env" or file_path.suffix == ".env"
             for lineno, line in enumerate(lines, start=1):
-                findings = scan_line(line)
+                findings = scan_line(line, is_env_file=is_env_file)
                 for finding in findings:
                     total_findings += 1
                     print(f"{file_path}:{lineno}  {finding}")
