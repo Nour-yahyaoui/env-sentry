@@ -18,6 +18,7 @@ from pathlib import Path
 
 import json
 
+from . import audit as audit_mod
 from . import detect, diffing, exporters, gensecrets, lint, report
 from .detect import AllowList, Finding, looks_like_secret
 from .envfile import EnvFile, is_placeholder, parse_env_file
@@ -433,6 +434,73 @@ def cmd_generate(args: argparse.Namespace) -> int:
 
 
 # ----------------------------------------------------------------------
+# audit
+# ----------------------------------------------------------------------
+
+STATUS_STYLE = {
+    audit_mod.PASS: ("✅", "green"),
+    audit_mod.WARN: ("⚠️ ", "yellow"),
+    audit_mod.FAIL: ("❌", "red"),
+}
+
+
+def _print_audit(result: audit_mod.AuditResult, title: str = "") -> None:
+    if title:
+        ui.header(title)
+    for check in result.checks:
+        symbol, colour = STATUS_STYLE[check.status]
+        line = f"{symbol} {check.title.ljust(34)} {check.message}"
+        ui.write(ui.paint(line, colour))
+        if check.status != audit_mod.PASS and check.fix:
+            ui.detail(f"↳ {check.fix}")
+    colour = "green" if result.score >= 90 else "yellow" if result.score >= 70 else "red"
+    ui.write("")
+    ui.write(ui.paint(
+        f"Health score: {result.score}/100  grade {result.grade}  "
+        f"[{audit_mod.bar(result.score)}]",
+        colour, bold=True,
+    ))
+
+
+def cmd_audit(args: argparse.Namespace) -> int:
+    root = Path(args.path)
+    if not root.exists():
+        ui.error(f"{root} does not exist.")
+        return 2
+
+    allowlist = _load_allowlist(root, getattr(args, "allowlist", ""))
+    env_path = Path(args.env) if args.env else None
+    example_path = Path(args.example) if args.example else None
+
+    if args.all:
+        results = audit_mod.audit_envs(root, allowlist=allowlist)
+    else:
+        results = {"": audit_mod.audit(root, env_path, example_path, allowlist=allowlist)}
+
+    if args.format == "json":
+        payload = {
+            name or "audit": result.to_dict() for name, result in results.items()
+        }
+        output = json.dumps(payload, indent=2)
+        if args.output:
+            Path(args.output).write_text(output + "\n")
+            ui.ok(f"Wrote audit to {args.output}")
+        else:
+            ui.write(output, force=True)
+    else:
+        for name, result in results.items():
+            _print_audit(result, title=name)
+            if name != list(results)[-1]:
+                ui.write("")
+
+    worst = min(result.score for result in results.values())
+    if args.min_score and worst < args.min_score:
+        ui.error(f"Score {worst} is below the required {args.min_score}.")
+        return 1
+    return 0
+
+
+# ----------------------------------------------------------------------
 # entrypoint
 # ----------------------------------------------------------------------
 
@@ -633,6 +701,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_gen.add_argument("--print", dest="print", action="store_true",
                        help="Print generated values in the summary (careful in CI logs)")
     p_gen.set_defaults(func=cmd_generate)
+
+    p_audit = subparsers.add_parser(
+        "audit",
+        help="Score your .env hygiene from 0-100",
+        description="Run eleven weighted checks (gitignore, tracking, git history, "
+        "permissions, key parity, placeholders, syntax, secret leakage) and "
+        "report a health score with a letter grade.",
+    )
+    p_audit.add_argument("path", nargs="?", default=".",
+                         help="Repository root to audit (default: .)")
+    p_audit.add_argument("--env", default="", help="Env file to audit (default: .env)")
+    p_audit.add_argument("--example", default="", help="Example file (default: .env.example)")
+    p_audit.add_argument("--all", action="store_true",
+                         help="Audit every .env* file with a matching .example")
+    p_audit.add_argument("--allowlist", default="", help="Allowlist file for secret scanning")
+    p_audit.add_argument("--min-score", type=int, default=0,
+                         help="Exit non-zero if the score is below this value")
+    p_audit.add_argument("--format", choices=["text", "json"], default="text",
+                         help="Output format (default: text)")
+    p_audit.add_argument("--output", "-o", default="", help="Write results to a file")
+    p_audit.set_defaults(func=cmd_audit)
 
     return parser
 
