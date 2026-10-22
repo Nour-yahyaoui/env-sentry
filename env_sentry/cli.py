@@ -16,7 +16,9 @@ import re
 import sys
 from pathlib import Path
 
-from . import detect, report
+import json
+
+from . import detect, lint, report
 from .detect import AllowList, Finding, looks_like_secret
 from .envfile import EnvFile, parse_env_file
 from .gitignore import GitIgnore
@@ -204,6 +206,60 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
 
 # ----------------------------------------------------------------------
+# lint
+# ----------------------------------------------------------------------
+
+LEVEL_COLORS = {lint.ERROR: "red", lint.WARNING: "yellow", lint.INFO: "grey"}
+
+
+def _lint_targets(args: argparse.Namespace) -> list[Path]:
+    if args.all:
+        return sorted(Path.cwd().glob(".env*")) or [Path(args.file)]
+    return [Path(args.file)]
+
+
+def cmd_lint(args: argparse.Namespace) -> int:
+    all_issues = {}
+    for target in _lint_targets(args):
+        all_issues[str(target)] = lint.lint_file(target)
+
+    total = [issue for issues in all_issues.values() for issue in issues]
+
+    if args.format == "json":
+        payload = {
+            "files": {
+                str(path): [issue.to_dict() for issue in issues]
+                for path, issues in all_issues.items()
+            },
+            "summary": lint.summarize(total),
+        }
+        output = json.dumps(payload, indent=2)
+        if args.output:
+            Path(args.output).write_text(output + "\n")
+            ui.ok(f"Wrote lint results to {args.output}")
+        else:
+            ui.write(output, force=True)
+    else:
+        for path, issues in all_issues.items():
+            if len(all_issues) > 1:
+                ui.header(f"{path}")
+            for issue in issues:
+                label = ui.paint(f"{issue.level.upper():7}", LEVEL_COLORS.get(issue.level, ""))
+                ui.write(f"  {label} line {issue.line:<4} {issue.message}  {ui.paint('[' + issue.code + ']', 'grey')}")
+        if not total:
+            ui.ok("No lint problems found.")
+        else:
+            colour = "red" if lint.has_errors(total) else "yellow"
+            ui.write(ui.paint(f"{lint.summarize(total)} in {len(all_issues)} file(s)", colour))
+
+    if lint.has_errors(total):
+        return 1
+    if args.strict and lint.has_warnings(total):
+        return 1
+    return 0
+
+
+# ----------------------------------------------------------------------
 # entrypoint
 # ----------------------------------------------------------------------
 
@@ -313,6 +369,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated file extensions to scan, e.g. '.py,.ts' (default: all supported)",
     )
     p_scan.set_defaults(func=cmd_scan)
+
+    p_lint = subparsers.add_parser(
+        "lint",
+        help="Validate .env syntax and style",
+        description="Catch malformed .env files: stray text, duplicate keys, "
+        "unquoted spaces, unterminated quotes, CRLF endings, BOMs and more.",
+    )
+    p_lint.add_argument(
+        "file", nargs="?", default=".env",
+        help="Env file to lint (default: .env)",
+    )
+    p_lint.add_argument(
+        "--all", action="store_true",
+        help="Lint every .env* file in the current directory",
+    )
+    p_lint.add_argument(
+        "--strict", action="store_true",
+        help="Treat warnings as failures too",
+    )
+    p_lint.add_argument(
+        "--format", choices=["text", "json"], default="text",
+        help="Output format (default: text)",
+    )
+    p_lint.add_argument("--output", "-o", default="", help="Write results to a file")
+    p_lint.set_defaults(func=cmd_lint)
 
     return parser
 
