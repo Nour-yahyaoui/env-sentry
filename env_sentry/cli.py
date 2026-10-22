@@ -12,13 +12,15 @@ Commands:
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import sys
 from pathlib import Path
 
-from .envfile import EnvFile, is_placeholder, parse_env_file
+from . import detect
+from .detect import AllowList, Finding, looks_like_secret
+from .envfile import EnvFile, parse_env_file
 from .gitignore import GitIgnore
+from .scanner import DEFAULT_IGNORE_DIRS
 from .ui import UI, ui
 
 VERSION = "0.1.4"
@@ -146,100 +148,62 @@ def is_gitignored_path(path: Path) -> bool:
 # secret detection
 # ----------------------------------------------------------------------
 
-SECRET_KEY_HINTS = re.compile(
-    r"(secret|token|api[_-]?key|password|passwd|access[_-]?key|private[_-]?key|"
-    r"auth|credential|client[_-]?secret)",
-    re.IGNORECASE,
-)
-
-# Key names that mention "token" but are almost always counts/flags, not secrets
-# (e.g. max_tokens, use_token, delta_tokens, a_tokens) — not credentials.
-TOKEN_COUNT_RE = re.compile(
-    r"(max|min|num|count|total|limit|delta|use|avg|is|has)[_-]?tokens?\b",
-    re.IGNORECASE,
-)
-KNOWN_PATTERNS = {
-    "AWS Access Key": re.compile(r"AKIA[0-9A-Z]{16}"),
-    "GitHub Token": re.compile(r"gh[pousr]_[A-Za-z0-9]{36,}"),
-    "Slack Token": re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"),
-    "Stripe Key": re.compile(r"sk_live_[A-Za-z0-9]{20,}"),
-    "Private Key Block": re.compile(r"-----BEGIN (RSA|EC|OPENSSH|DSA|PGP)? ?PRIVATE KEY-----"),
-    "Generic JWT": re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
-}
-
-DEFAULT_IGNORE_DIRS = {
-    ".git", "node_modules", "venv", ".venv", "__pycache__", "dist", "build",
-    ".mypy_cache", ".pytest_cache", "target", ".next", ".tox", "vendor",
-}
-
-SCANNABLE_EXTENSIONS = {
-    ".py", ".js", ".ts", ".jsx", ".tsx", ".env", ".yml", ".yaml", ".json",
-    ".toml", ".ini", ".cfg", ".sh", ".rb", ".go", ".java", ".php", ".txt",
-    ".properties", ".conf", ".html", ".htm", ".vue", ".svelte", ".xml",
-    ".md", ".mjs", ".cjs",
+SEVERITY_COLORS = {
+    detect.CRITICAL: "red",
+    detect.HIGH: "red",
+    detect.MEDIUM: "yellow",
+    detect.LOW: "grey",
 }
 
 
-def looks_like_secret(key: str, value: str, is_literal: bool = True) -> bool:
-    if not value or is_placeholder(value):
-        return False
-    if len(value) < 12:
-        return False
-    if TOKEN_COUNT_RE.search(key):
-        return False
-    if not SECRET_KEY_HINTS.search(key):
-        return False
-    if not is_literal:
-        return False
-    if value.replace(".", "", 1).isdigit():
-        return False
-    return True
+def _load_allowlist(root: Path) -> AllowList:
+    allowlist = AllowList([])
+    for candidate in (Path.cwd() / ".env-sentry-allow", root / ".env-sentry-allow"):
+        if candidate.is_file():
+            allowlist = AllowList.load(candidate)
+            break
+    return allowlist
 
 
-def scan_line(line: str, is_env_file: bool = False) -> list[str]:
-    findings = []
-    for name, pattern in KNOWN_PATTERNS.items():
-        if pattern.search(line):
-            findings.append(name)
-    match = _KV_RE.match(line)
-    if match:
-        key, raw_val = match.group(1), match.group(2).strip()
-        is_literal = is_env_file or (
-            len(raw_val) >= 2 and raw_val[0] == raw_val[-1] and raw_val[0] in ("'", '"')
-        )
-        val = raw_val.strip("'\"")
-        if looks_like_secret(key, val, is_literal=is_literal):
-            findings.append(f"Suspicious value for '{key}'")
-    return findings
+def _render_findings(findings: list[Finding], show_severity: bool = True) -> None:
+    for finding in findings:
+        label = ui.paint(finding.severity.upper().ljust(8), SEVERITY_COLORS.get(finding.severity, ""))
+        location = ui.paint(f"{finding.path}:{finding.line}", "cyan")
+        suffix = f"  {ui.paint('(' + finding.redacted() + ')', 'grey')}" if finding.redacted() else ""
+        if show_severity:
+            ui.write(f"{location}  {label} {finding.rule}{suffix}")
+        else:
+            ui.write(f"{location}  {finding.rule}{suffix}")
+
+
+def _print_summary(findings: list[Finding]) -> None:
+    counts = {}
+    for finding in findings:
+        counts[finding.severity] = counts.get(finding.severity, 0) + 1
+    parts = [
+        f"{counts[sev]} {sev}" for sev in
+        (detect.CRITICAL, detect.HIGH, detect.MEDIUM, detect.LOW) if counts.get(sev)
+    ]
+    ui.error(f"{len(findings)} potential secret(s) found ({', '.join(parts)}). "
+             "Review before committing/pushing.")
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
     root = Path(args.path)
-    total_findings = 0
+    if not root.exists():
+        ui.error(f"{root} does not exist.")
+        return 1
 
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in DEFAULT_IGNORE_DIRS and not d.startswith(".git")]
-        for filename in filenames:
-            file_path = Path(dirpath) / filename
-            is_env_file = filename.startswith(".env")
-            if file_path.suffix not in SCANNABLE_EXTENSIONS and not is_env_file:
-                continue
-            try:
-                lines = file_path.read_text(errors="ignore").splitlines()
-            except (UnicodeDecodeError, OSError):
-                continue
-            for lineno, line in enumerate(lines, start=1):
-                findings = scan_line(line, is_env_file=is_env_file)
-                for finding in findings:
-                    total_findings += 1
-                    ui.write(f"{ui.paint(str(file_path), 'cyan')}:{lineno}  {finding}")
+    allowlist = _load_allowlist(root)
+    findings = detect.scan_path(root, allowlist=allowlist, min_severity=detect.LOW)
 
-    if total_findings == 0:
+    if not findings:
         ui.ok("No obvious hardcoded secrets found.")
         return 0
-    else:
-        ui.error(f"{total_findings} potential secret(s) found. Review before committing/pushing.")
-        return 1
+
+    _render_findings(findings)
+    _print_summary(findings)
+    return 1
 
 
 # ----------------------------------------------------------------------
