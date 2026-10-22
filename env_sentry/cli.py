@@ -19,7 +19,7 @@ from pathlib import Path
 import json
 
 from . import audit as audit_mod
-from . import detect, diffing, exporters, gensecrets, lint, report
+from . import detect, diffing, exporters, gensecrets, lint, report, usage as usage_mod
 from .detect import AllowList, Finding, looks_like_secret
 from .envfile import EnvFile, is_placeholder, parse_env_file
 from .gitignore import GitIgnore
@@ -501,6 +501,67 @@ def cmd_audit(args: argparse.Namespace) -> int:
 
 
 # ----------------------------------------------------------------------
+# usage
+# ----------------------------------------------------------------------
+
+def cmd_usage(args: argparse.Namespace) -> int:
+    root = Path(args.path)
+    env_path = Path(args.env)
+    if not root.exists():
+        ui.error(f"{root} does not exist.")
+        return 2
+    if not env_path.exists():
+        ui.error(f"{env_path} not found.")
+        return 2
+
+    ignore = set(args.ignore_keys.split(",")) if args.ignore_keys else set()
+    report_obj = usage_mod.analyse(
+        root,
+        env_path,
+        ignore=ignore,
+        exclude=[e.strip() for e in args.exclude.split(",") if e.strip()],
+    )
+
+    used = report_obj.used_keys()
+    unused = report_obj.unused_keys()
+    undefined = report_obj.undefined_keys()
+
+    if args.format == "json":
+        payload = json.dumps(usage_mod.to_dict(report_obj), indent=2)
+        if args.output:
+            Path(args.output).write_text(payload + "\n")
+            ui.ok(f"Wrote usage report to {args.output}")
+        else:
+            ui.write(payload, force=True)
+    else:
+        ui.header(f"{len(report_obj.env_keys)} key(s) in {env_path}")
+        if args.list_used:
+            for key in sorted(used):
+                ui.write(f"  {ui.paint(key, 'green')}  {report_obj.reference_count(key)} reference(s)")
+        if unused:
+            ui.warn(f"{len(unused)} key(s) defined but never referenced in code:")
+            for key in unused:
+                ui.bullet(key, "yellow")
+            ui.detail("Consider removing them, or add them to --ignore-keys / .env-sentry-allow")
+        else:
+            ui.ok("Every key is referenced somewhere in the codebase.")
+        if undefined:
+            ui.error(f"{len(undefined)} key(s) referenced in code but missing from {env_path}:")
+            for key in undefined:
+                ui.bullet(key, "red")
+        else:
+            ui.ok("No undefined environment references found.")
+
+    if args.fail_on == "unused" and unused:
+        return 1
+    if args.fail_on == "undefined" and undefined:
+        return 1
+    if args.fail_on == "any" and (unused or undefined):
+        return 1
+    return 0
+
+
+# ----------------------------------------------------------------------
 # entrypoint
 # ----------------------------------------------------------------------
 
@@ -722,6 +783,28 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Output format (default: text)")
     p_audit.add_argument("--output", "-o", default="", help="Write results to a file")
     p_audit.set_defaults(func=cmd_audit)
+
+    p_usage = subparsers.add_parser(
+        "usage",
+        help="Find unused keys and undefined env references",
+        description="Cross-reference .env against the code: which keys are never "
+        "read, and which environment variables the code expects but you never "
+        "defined.",
+    )
+    p_usage.add_argument("path", nargs="?", default=".", help="Code root to scan (default: .)")
+    p_usage.add_argument("--env", default=".env", help="Env file (default: .env)")
+    p_usage.add_argument("--exclude", default="", help="Comma-separated globs to skip")
+    p_usage.add_argument("--ignore-keys", default="",
+                         help="Comma-separated keys to always treat as known")
+    p_usage.add_argument("--list-used", action="store_true",
+                         help="Also list the keys that are referenced, with counts")
+    p_usage.add_argument("--fail-on", choices=["none", "unused", "undefined", "any"],
+                         default="none",
+                         help="Exit non-zero on unused/undefined keys (default: none)")
+    p_usage.add_argument("--format", choices=["text", "json"], default="text",
+                         help="Output format (default: text)")
+    p_usage.add_argument("--output", "-o", default="", help="Write results to a file")
+    p_usage.set_defaults(func=cmd_usage)
 
     return parser
 
