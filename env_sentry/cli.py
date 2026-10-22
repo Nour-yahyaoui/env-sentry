@@ -17,6 +17,7 @@ import re
 import sys
 from pathlib import Path
 
+from .envfile import EnvFile, is_placeholder, parse_env_file
 from .ui import UI, ui
 
 VERSION = "0.1.4"
@@ -27,25 +28,6 @@ AUTHOR = "Nour Yahyaoui"
 # ----------------------------------------------------------------------
 
 _KV_RE = re.compile(r"""^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$""")
-
-
-def parse_env_file(path: Path) -> dict[str, str]:
-    """Parse a .env-style file into a dict of key -> raw value string."""
-    values: dict[str, str] = {}
-    if not path.exists():
-        return values
-    for line in path.read_text(errors="ignore").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        match = _KV_RE.match(line)
-        if not match:
-            continue
-        key, val = match.group(1), match.group(2).strip()
-        if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
-            val = val[1:-1]
-        values[key] = val
-    return values
 
 
 # ----------------------------------------------------------------------
@@ -160,11 +142,6 @@ SECRET_KEY_HINTS = re.compile(
     re.IGNORECASE,
 )
 
-PLACEHOLDER_RE = re.compile(
-    r"^(your|my|example|placeholder|xxx+|changeme|todo|<.*>|\$\{.*\}|test|fake|dummy)",
-    re.IGNORECASE,
-)
-
 # Key names that mention "token" but are almost always counts/flags, not secrets
 # (e.g. max_tokens, use_token, delta_tokens, a_tokens) — not credentials.
 TOKEN_COUNT_RE = re.compile(
@@ -194,7 +171,7 @@ SCANNABLE_EXTENSIONS = {
 
 
 def looks_like_secret(key: str, value: str, is_literal: bool = True) -> bool:
-    if not value or PLACEHOLDER_RE.match(value):
+    if not value or is_placeholder(value):
         return False
     if len(value) < 12:
         return False
