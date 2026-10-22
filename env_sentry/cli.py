@@ -21,6 +21,7 @@ import json
 from . import audit as audit_mod
 from . import badge as badge_mod
 from . import hooks as hooks_mod
+from . import merge as merge_mod
 from . import detect, diffing, exporters, gensecrets, lint, report, usage as usage_mod
 from .detect import AllowList, Finding, looks_like_secret
 from .envfile import EnvFile, is_placeholder, parse_env_file
@@ -628,6 +629,91 @@ def cmd_hooks(args: argparse.Namespace) -> int:
 
 
 # ----------------------------------------------------------------------
+# merge / prune
+# ----------------------------------------------------------------------
+
+def cmd_merge(args: argparse.Namespace) -> int:
+    source, target = Path(args.source), Path(args.target)
+    if not target.exists() and not args.create:
+        ui.error(f"{target} not found (pass --create to start from {source}).")
+        return 2
+
+    try:
+        plan = merge_mod.merge_files(
+            target,
+            source,
+            overwrite=args.overwrite,
+            with_values=args.with_values,
+            only=[p.strip() for p in args.only.split(",") if p.strip()],
+            skip=[p.strip() for p in args.skip.split(",") if p.strip()],
+            dry_run=args.dry_run,
+        )
+    except FileNotFoundError as exc:
+        ui.error(str(exc))
+        return 2
+
+    for key in plan.added:
+        ui.write(ui.paint(f"+ {key}", "green"))
+    for key in plan.overwritten:
+        ui.write(ui.paint(f"~ {key}", "yellow"))
+
+    if not plan.changed:
+        ui.ok(f"Nothing to merge; {target} already has every key from {source}.")
+        return 0
+
+    if args.dry_run:
+        ui.info(f"Dry run: would update {target} ({plan.summary()}).")
+        return 0
+
+    ui.ok(f"Updated {target} ({plan.summary()}).")
+    if not args.with_values:
+        ui.detail("values were replaced with placeholders; pass --with-values to copy them")
+    return 0
+
+
+def cmd_prune(args: argparse.Namespace) -> int:
+    env_path = Path(args.env)
+    if not env_path.exists():
+        ui.error(f"{env_path} not found.")
+        return 2
+
+    if args.from_example:
+        keep = EnvFile.load(Path(args.example)).keys()
+        source = args.example
+    else:
+        from . import usage as usage_mod
+
+        report_obj = usage_mod.analyse(Path(args.path), env_path)
+        keep = report_obj.used_keys()
+        source = "code references"
+
+    plan, backup = merge_mod.prune(
+        env_path,
+        keep_keys=keep,
+        keep_patterns=[p.strip() for p in args.keep.split(",") if p.strip()],
+        dry_run=not args.write,
+        backup=not args.no_backup,
+    )
+
+    if not plan.removed:
+        ui.ok(f"Nothing to prune: every key in {env_path} is still used.")
+        return 0
+
+    ui.warn(f"{len(plan.removed)} key(s) not found in {source}:")
+    for key in plan.removed:
+        ui.bullet(key, "red")
+
+    if not args.write:
+        ui.info("Dry run only. Re-run with --write to remove them.")
+        return 0
+
+    ui.ok(f"Removed {len(plan.removed)} key(s) from {env_path}.")
+    if backup:
+        ui.detail(f"Backup written to {backup}")
+    return 0
+
+
+# ----------------------------------------------------------------------
 # entrypoint
 # ----------------------------------------------------------------------
 
@@ -907,6 +993,41 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Append to an existing hook instead of aborting")
     p_hooks.add_argument("--path", default=".", help="Directory inside the repo (default: .)")
     p_hooks.set_defaults(func=cmd_hooks)
+
+    p_merge = subparsers.add_parser(
+        "merge",
+        help="Add missing keys from another env file",
+        description="Fold another env file (typically .env.example) into one of "
+        "yours. Comments and ordering are preserved; values become placeholders "
+        "unless --with-values is passed.",
+    )
+    p_merge.add_argument("source", help="File to read keys from, e.g. .env.example")
+    p_merge.add_argument("target", nargs="?", default=".env", help="File to update (default: .env)")
+    p_merge.add_argument("--overwrite", action="store_true",
+                         help="Also overwrite values of keys that already exist")
+    p_merge.add_argument("--with-values", action="store_true",
+                         help="Copy real values instead of placeholders")
+    p_merge.add_argument("--only", default="", help="Comma-separated key globs to merge")
+    p_merge.add_argument("--skip", default="", help="Comma-separated key globs to ignore")
+    p_merge.add_argument("--create", action="store_true", help="Create the target if missing")
+    p_merge.add_argument("--dry-run", action="store_true", help="Show what would change")
+    p_merge.set_defaults(func=cmd_merge)
+
+    p_prune = subparsers.add_parser(
+        "prune",
+        help="Remove keys that nothing references anymore",
+        description="Delete dead keys from .env, either those missing from the "
+        "template or those no code reads. Dry run unless --write is passed.",
+    )
+    p_prune.add_argument("--env", default=".env", help="Env file to prune (default: .env)")
+    p_prune.add_argument("--from-example", action="store_true",
+                         help="Keep only keys present in the example file")
+    p_prune.add_argument("--example", default=".env.example", help="Example file to trust")
+    p_prune.add_argument("--path", default=".", help="Code root for usage detection (default: .)")
+    p_prune.add_argument("--keep", default="", help="Comma-separated key globs to always keep")
+    p_prune.add_argument("--write", action="store_true", help="Actually rewrite the file")
+    p_prune.add_argument("--no-backup", action="store_true", help="Do not write .env.bak")
+    p_prune.set_defaults(func=cmd_prune)
 
     return parser
 
