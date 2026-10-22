@@ -19,6 +19,7 @@ from pathlib import Path
 import json
 
 from . import audit as audit_mod
+from . import badge as badge_mod
 from . import detect, diffing, exporters, gensecrets, lint, report, usage as usage_mod
 from .detect import AllowList, Finding, looks_like_secret
 from .envfile import EnvFile, is_placeholder, parse_env_file
@@ -562,6 +563,25 @@ def cmd_usage(args: argparse.Namespace) -> int:
 
 
 # ----------------------------------------------------------------------
+# badge
+# ----------------------------------------------------------------------
+
+def cmd_badge(args: argparse.Namespace) -> int:
+    score = args.score
+    if score is None:
+        root = Path(args.path)
+        result = audit_mod.audit(root, allowlist=_load_allowlist(root))
+        score = result.score
+
+    svg = badge_mod.write(args.output, score, label=args.label, style=args.style)
+    ui.ok(f"Wrote badge for score {score}/100 to {args.output}")
+    ui.detail(f"README snippet: {badge_mod.markdown(args.output)}")
+    if args.print:
+        ui.write(svg, force=True)
+    return 0
+
+
+# ----------------------------------------------------------------------
 # entrypoint
 # ----------------------------------------------------------------------
 
@@ -805,6 +825,24 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Output format (default: text)")
     p_usage.add_argument("--output", "-o", default="", help="Write results to a file")
     p_usage.set_defaults(func=cmd_usage)
+
+    p_badge = subparsers.add_parser(
+        "badge",
+        help="Generate an SVG health badge for your README",
+        description="Run the audit and render the score as a shields-style SVG "
+        "badge, commit it, and show off (or shame) your .env hygiene.",
+    )
+    p_badge.add_argument("path", nargs="?", default=".", help="Repository root (default: .)")
+    p_badge.add_argument("--output", "-o", default=".env-sentry-badge.svg",
+                         help="Badge file to write (default: .env-sentry-badge.svg)")
+    p_badge.add_argument("--label", default="env-sentry", help="Left-hand label text")
+    p_badge.add_argument("--style", choices=["flat", "flat-square"], default="flat",
+                         help="Badge shape (default: flat)")
+    p_badge.add_argument("--score", type=int, default=None,
+                         help="Use this score instead of running the audit")
+    p_badge.add_argument("--print", dest="print", action="store_true",
+                         help="Also print the SVG to stdout")
+    p_badge.set_defaults(func=cmd_badge)
 
     return parser
 
