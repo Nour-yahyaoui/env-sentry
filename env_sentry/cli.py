@@ -22,6 +22,7 @@ from . import audit as audit_mod
 from . import badge as badge_mod
 from . import hooks as hooks_mod
 from . import merge as merge_mod
+from . import stats as stats_mod
 from . import detect, diffing, exporters, gensecrets, lint, report, usage as usage_mod
 from .detect import AllowList, Finding, looks_like_secret
 from .envfile import EnvFile, is_placeholder, parse_env_file
@@ -714,6 +715,66 @@ def cmd_prune(args: argparse.Namespace) -> int:
 
 
 # ----------------------------------------------------------------------
+# stats
+# ----------------------------------------------------------------------
+
+def cmd_stats(args: argparse.Namespace) -> int:
+    env_path = Path(args.env)
+    if not env_path.exists():
+        ui.error(f"{env_path} not found.")
+        return 2
+
+    text = env_path.read_text(errors="ignore")
+    env = EnvFile.parse(text)
+    result = stats_mod.analyse(env, str(env_path), text)
+
+    if args.format == "json":
+        payload = json.dumps(result.to_dict(), indent=2)
+        if args.output:
+            Path(args.output).write_text(payload + "\n")
+            ui.ok(f"Wrote stats to {args.output}")
+        else:
+            ui.write(payload, force=True)
+        return 0
+
+    ui.header(f"{env_path} — {result.keys} key(s), {result.bytes} bytes")
+    rows = [
+        ("comments", result.comments),
+        ("blank lines", result.blank_lines),
+        ("empty values", result.empty_values),
+        ("placeholders", result.placeholders),
+        ("duplicate keys", result.duplicates),
+        ("avg value length", f"{result.avg_length:.1f} chars"),
+        ("median length", f"{result.median_length:.1f} chars"),
+        ("longest value", f"{result.max_length} chars"),
+        ("avg entropy", f"{result.entropy_avg:.2f} bits/char"),
+    ]
+    for label, value in rows:
+        ui.write(f"  {label.ljust(20)} {value}")
+
+    if result.categories:
+        ui.write("")
+        ui.header("Keys by category")
+        for name, count in sorted(result.categories.items(), key=lambda item: -item[1]):
+            bar = "▇" * min(count, 40)
+            ui.write(f"  {name.ljust(16)} {bar} {count}")
+
+    if result.repeated_values:
+        ui.write("")
+        ui.warn("The same value is reused under multiple keys:")
+        for keys in result.repeated_values:
+            ui.bullet(" = ".join(keys), "yellow")
+
+    if result.weak_keys:
+        ui.write("")
+        ui.warn("Short values for security-sensitive keys:")
+        for key in result.weak_keys:
+            ui.bullet(key, "red")
+
+    return 0
+
+
+# ----------------------------------------------------------------------
 # entrypoint
 # ----------------------------------------------------------------------
 
@@ -1028,6 +1089,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_prune.add_argument("--write", action="store_true", help="Actually rewrite the file")
     p_prune.add_argument("--no-backup", action="store_true", help="Do not write .env.bak")
     p_prune.set_defaults(func=cmd_prune)
+
+    p_stats = subparsers.add_parser(
+        "stats",
+        help="Show env file statistics and category breakdown",
+        description="Key counts by category, value length and entropy "
+        "distribution, placeholder debt, repeated values and weak secrets.",
+    )
+    p_stats.add_argument("--env", default=".env", help="Env file to analyse (default: .env)")
+    p_stats.add_argument("--format", choices=["text", "json"], default="text",
+                         help="Output format (default: text)")
+    p_stats.add_argument("--output", "-o", default="", help="Write results to a file")
+    p_stats.set_defaults(func=cmd_stats)
 
     return parser
 
