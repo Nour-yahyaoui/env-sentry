@@ -18,7 +18,7 @@ from pathlib import Path
 
 import json
 
-from . import detect, lint, report
+from . import detect, diffing, lint, report
 from .detect import AllowList, Finding, looks_like_secret
 from .envfile import EnvFile, parse_env_file
 from .gitignore import GitIgnore
@@ -260,6 +260,64 @@ def cmd_lint(args: argparse.Namespace) -> int:
 
 
 # ----------------------------------------------------------------------
+# diff
+# ----------------------------------------------------------------------
+
+DIFF_COLORS = {diffing.ADDED: "green", diffing.REMOVED: "red",
+               diffing.CHANGED: "yellow", diffing.SAME: "grey"}
+
+
+def cmd_diff(args: argparse.Namespace) -> int:
+    left_path, right_path = Path(args.left), Path(args.right)
+    for path in (left_path, right_path):
+        if not path.exists():
+            ui.error(f"{path} not found.")
+            return 2
+
+    left = EnvFile.load(left_path)
+    right = EnvFile.load(right_path)
+    changes = diffing.compare(left, right, include_same=args.show_same)
+    if not args.show_same:
+        changes = diffing.only_differences(changes)
+
+    if args.format == "json":
+        payload = {
+            "left": str(left_path),
+            "right": str(right_path),
+            "counts": diffing.counts(changes),
+            "changes": [change.to_dict(show_values=args.show_values) for change in changes],
+        }
+        payload_text = json.dumps(payload, indent=2)
+        if args.output:
+            Path(args.output).write_text(payload_text + "\n")
+            ui.ok(f"Wrote diff to {args.output}")
+        else:
+            ui.write(payload_text, force=True)
+    else:
+        ui.header(f"--- {left_path}")
+        ui.header(f"+++ {right_path}")
+        if args.keys_only:
+            for change in changes:
+                line = f"{diffing.SYMBOLS[change.kind]} {change.key}"
+                ui.write(ui.paint(line, DIFF_COLORS.get(change.kind, "")))
+        else:
+            width = max([len(change.key) for change in changes] + [12]) + 2
+            for change in changes:
+                line = change.render(show_values=args.show_values, width=width)
+                ui.write(ui.paint(line, DIFF_COLORS.get(change.kind, "")))
+        if not changes:
+            ui.ok("No differences.")
+        else:
+            ui.write(ui.paint(f"\n{diffing.summary(changes)}", "cyan"))
+            if not args.show_values:
+                ui.detail("values are masked; pass --show-values to reveal them")
+
+    if args.fail_on_diff and any(change.kind != diffing.SAME for change in changes):
+        return 1
+    return 0
+
+
+# ----------------------------------------------------------------------
 # entrypoint
 # ----------------------------------------------------------------------
 
@@ -394,6 +452,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_lint.add_argument("--output", "-o", default="", help="Write results to a file")
     p_lint.set_defaults(func=cmd_lint)
+
+    p_diff = subparsers.add_parser(
+        "diff",
+        help="Compare two env files (values masked by default)",
+        description="Show keys that were added, removed or changed between two "
+        "env files. Values are masked so the output is safe to paste in a PR.",
+    )
+    p_diff.add_argument("left", help="The 'before' file, e.g. .env")
+    p_diff.add_argument("right", help="The 'after' file, e.g. .env.production")
+    p_diff.add_argument("--keys-only", action="store_true",
+                        help="Only show which keys differ, no values at all")
+    p_diff.add_argument("--show-values", action="store_true",
+                        help="Reveal real values (be careful where this output goes)")
+    p_diff.add_argument("--show-same", action="store_true",
+                        help="Also list unchanged keys")
+    p_diff.add_argument("--format", choices=["text", "json"], default="text",
+                        help="Output format (default: text)")
+    p_diff.add_argument("--output", "-o", default="", help="Write results to a file")
+    p_diff.add_argument("--fail-on-diff", action="store_true",
+                        help="Exit non-zero when the files differ (useful in CI)")
+    p_diff.set_defaults(func=cmd_diff)
 
     return parser
 
