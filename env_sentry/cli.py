@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 from .envfile import EnvFile, is_placeholder, parse_env_file
+from .gitignore import GitIgnore
 from .ui import UI, ui
 
 VERSION = "0.1.4"
@@ -73,7 +74,7 @@ def cmd_check(args: argparse.Namespace) -> int:
         ui.detail("Replace these with placeholders like `your_api_key_here` before committing.")
 
     # Warn if the env file is not gitignored
-    if not is_gitignored(env_path.name):
+    if not is_gitignored_path(env_path):
         exit_code = 1
         ui.error(f"'{env_path.name}' does not appear to be listed in .gitignore!")
         ui.detail("Anyone who commits will leak real secrets. Run `env-sentry init` to fix this.")
@@ -125,11 +126,20 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 
 def is_gitignored(name: str) -> bool:
-    gitignore_path = Path(".gitignore")
-    if not gitignore_path.exists():
-        return False
-    patterns = [p.strip() for p in gitignore_path.read_text().splitlines()]
-    return name in patterns or f"/{name}" in patterns or "*.env" in patterns
+    """Is ``name`` (a path relative to cwd) ignored by this repo's .gitignore?"""
+    return is_gitignored_path(Path(name))
+
+
+def is_gitignored_path(path: Path) -> bool:
+    """Full .gitignore matching (globs, negation, nested files) for ``path``."""
+    path = Path(path)
+    root = Path.cwd()
+    gitignore = GitIgnore.load(root)
+    try:
+        rel = path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        rel = path.as_posix()
+    return gitignore.is_ignored(rel, is_dir=path.is_dir())
 
 
 # ----------------------------------------------------------------------
