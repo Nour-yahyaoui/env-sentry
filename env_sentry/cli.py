@@ -18,7 +18,7 @@ from pathlib import Path
 
 import json
 
-from . import detect, diffing, lint, report
+from . import detect, diffing, exporters, lint, report
 from .detect import AllowList, Finding, looks_like_secret
 from .envfile import EnvFile, parse_env_file
 from .gitignore import GitIgnore
@@ -318,6 +318,43 @@ def cmd_diff(args: argparse.Namespace) -> int:
 
 
 # ----------------------------------------------------------------------
+# export
+# ----------------------------------------------------------------------
+
+def cmd_export(args: argparse.Namespace) -> int:
+    env_path = Path(args.env)
+    if not env_path.exists():
+        ui.error(f"{env_path} not found.")
+        return 2
+
+    env = EnvFile.load(env_path)
+    try:
+        rendered = exporters.export_env(
+            env,
+            fmt=args.format,
+            redact=args.redact,
+            include=[p.strip() for p in args.include.split(",") if p.strip()],
+            exclude=[p.strip() for p in args.exclude.split(",") if p.strip()],
+            prefix=args.prefix,
+            name=args.name,
+            namespace=args.namespace,
+            service=args.service,
+            section=args.section,
+        )
+    except ValueError as exc:
+        ui.error(str(exc))
+        return 2
+
+    if args.output:
+        Path(args.output).write_text(rendered)
+        note = " (values masked)" if args.redact else ""
+        ui.ok(f"Wrote {len(env)} key(s) as {args.format}{note} to {args.output}")
+    else:
+        ui.write(rendered, force=True)
+    return 0
+
+
+# ----------------------------------------------------------------------
 # entrypoint
 # ----------------------------------------------------------------------
 
@@ -473,6 +510,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_diff.add_argument("--fail-on-diff", action="store_true",
                         help="Exit non-zero when the files differ (useful in CI)")
     p_diff.set_defaults(func=cmd_diff)
+
+    p_export = subparsers.add_parser(
+        "export",
+        help="Convert .env into json/yaml/shell/compose/k8s/...",
+        description="Render your env file in whatever format the next tool needs.",
+    )
+    p_export.add_argument("--env", default=".env", help="Env file to read (default: .env)")
+    p_export.add_argument("--format", default="dotenv", choices=list(exporters.FORMATS),
+                          help="Output format (default: dotenv)")
+    p_export.add_argument("--output", "-o", default="", help="Write to a file instead of stdout")
+    p_export.add_argument("--redact", action="store_true",
+                          help="Mask every value in the output")
+    p_export.add_argument("--include", default="", help="Comma-separated key globs to include")
+    p_export.add_argument("--exclude", default="", help="Comma-separated key globs to exclude")
+    p_export.add_argument("--prefix", default="", help="Prefix added to every key")
+    p_export.add_argument("--name", default="app-secrets", help="Secret name (k8s format)")
+    p_export.add_argument("--namespace", default="default", help="Namespace (k8s format)")
+    p_export.add_argument("--service", default="app", help="Service name (compose format)")
+    p_export.add_argument("--section", default="settings", help="INI section name")
+    p_export.set_defaults(func=cmd_export)
 
     return parser
 
