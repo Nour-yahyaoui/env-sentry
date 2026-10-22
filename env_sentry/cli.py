@@ -18,9 +18,9 @@ from pathlib import Path
 
 import json
 
-from . import detect, diffing, exporters, lint, report
+from . import detect, diffing, exporters, gensecrets, lint, report
 from .detect import AllowList, Finding, looks_like_secret
-from .envfile import EnvFile, parse_env_file
+from .envfile import EnvFile, is_placeholder, parse_env_file
 from .gitignore import GitIgnore
 from .scanner import DEFAULT_IGNORE_DIRS
 from .ui import UI, ui
@@ -355,6 +355,84 @@ def cmd_export(args: argparse.Namespace) -> int:
 
 
 # ----------------------------------------------------------------------
+# generate secrets
+# ----------------------------------------------------------------------
+
+def _gen_targets(env: EnvFile, keys: list[str], force: bool) -> list[str]:
+    if keys:
+        return keys
+    if force:
+        return [entry.key for entry in env.entries]
+    return [
+        entry.key for entry in env.entries
+        if entry.value == "" or is_placeholder(entry.value)
+    ]
+
+
+def cmd_generate(args: argparse.Namespace) -> int:
+    env_path = Path(args.env)
+
+    if args.passphrase and args.length < 4:
+        ui.error("--length must be at least 4")
+        return 2
+
+    if not env_path.exists():
+        if not args.keys:
+            ui.error(f"{env_path} not found. Create it with `env-sentry init`, "
+                     "or pass --key NAME to print a standalone value.")
+            return 2
+        env = EnvFile([], path=env_path, exists=False)
+    else:
+        env = EnvFile.load(env_path)
+
+    targets = _gen_targets(env, args.keys, args.force)
+    if not targets:
+        ui.ok("Nothing to generate: no empty or placeholder values found "
+              "(use --force to overwrite existing values).")
+        return 0
+
+    generated = {}
+    for key in targets:
+        if args.passphrase:
+            value = gensecrets.passphrase(words=args.words)
+        else:
+            value = gensecrets.generate_for_key(
+                key, length=args.length, charset=args.charset, prefix=args.prefix
+            )
+        generated[key] = value
+
+    if args.dry_run:
+        for key, value in generated.items():
+            ui.write(f"{key}={value}")
+        ui.info(f"Dry run: would write {len(generated)} value(s) to {env_path}.")
+        return 0
+
+    if env.exists:
+        for entry in env.entries:
+            if entry.key in generated:
+                entry.value = generated[entry.key]
+                entry.quote = '"' if any(ch in entry.value for ch in " #\\") else ""
+        env_path.write_text(env.render())
+    else:
+        lines = [f"{key}={value}" for key, value in generated.items()]
+        env_path.write_text("\n".join(lines) + "\n")
+
+    try:  # keep secrets out of other users' reach
+        env_path.chmod(0o600)
+    except OSError:  # pragma: no cover - exotic filesystems
+        pass
+
+    for key, value in generated.items():
+        score = gensecrets.strength(value)
+        label = ui.paint(f"{score:3d}/100", "green" if score >= 70 else "yellow")
+        ui.ok(f"{key} = {value if args.print else '<generated>'}  {label}")
+
+    ui.info(f"Generated {len(generated)} secret(s) in {env_path} "
+            "(file permissions set to 600).")
+    return 0
+
+
+# ----------------------------------------------------------------------
 # entrypoint
 # ----------------------------------------------------------------------
 
@@ -530,6 +608,31 @@ def build_parser() -> argparse.ArgumentParser:
     p_export.add_argument("--service", default="app", help="Service name (compose format)")
     p_export.add_argument("--section", default="settings", help="INI section name")
     p_export.set_defaults(func=cmd_export)
+
+    p_gen = subparsers.add_parser(
+        "gen",
+        help="Generate strong random values for empty/placeholder secrets",
+        description="Fill in secure random values for keys that are missing or "
+        "still say 'your_api_key_here'. Uses secrets module CSPRNG.",
+    )
+    p_gen.add_argument("--env", default=".env", help="Env file to update (default: .env)")
+    p_gen.add_argument("--key", dest="keys", action="append", default=[],
+                       help="Only (re)generate this key; repeatable")
+    p_gen.add_argument("--length", type=int, default=32, help="Value length (default: 32)")
+    p_gen.add_argument("--charset", default="alnum", choices=sorted(gensecrets.CHARSETS),
+                       help="Character set to use (default: alnum)")
+    p_gen.add_argument("--prefix", default="", help="Prefix for generated values")
+    p_gen.add_argument("--passphrase", action="store_true",
+                       help="Generate memorable word-based values instead of random strings")
+    p_gen.add_argument("--words", type=int, default=4,
+                       help="Word count for --passphrase (default: 4)")
+    p_gen.add_argument("--force", action="store_true",
+                       help="Overwrite existing placeholder values and unknown keys")
+    p_gen.add_argument("--dry-run", action="store_true",
+                       help="Print what would be generated without writing")
+    p_gen.add_argument("--print", dest="print", action="store_true",
+                       help="Print generated values in the summary (careful in CI logs)")
+    p_gen.set_defaults(func=cmd_generate)
 
     return parser
 
