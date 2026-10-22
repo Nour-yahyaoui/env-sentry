@@ -16,7 +16,7 @@ import re
 import sys
 from pathlib import Path
 
-from . import detect
+from . import detect, report
 from .detect import AllowList, Finding, looks_like_secret
 from .envfile import EnvFile, parse_env_file
 from .gitignore import GitIgnore
@@ -148,44 +148,15 @@ def is_gitignored_path(path: Path) -> bool:
 # secret detection
 # ----------------------------------------------------------------------
 
-SEVERITY_COLORS = {
-    detect.CRITICAL: "red",
-    detect.HIGH: "red",
-    detect.MEDIUM: "yellow",
-    detect.LOW: "grey",
-}
-
-
-def _load_allowlist(root: Path) -> AllowList:
-    allowlist = AllowList([])
-    for candidate in (Path.cwd() / ".env-sentry-allow", root / ".env-sentry-allow"):
-        if candidate.is_file():
-            allowlist = AllowList.load(candidate)
-            break
-    return allowlist
-
-
-def _render_findings(findings: list[Finding], show_severity: bool = True) -> None:
-    for finding in findings:
-        label = ui.paint(finding.severity.upper().ljust(8), SEVERITY_COLORS.get(finding.severity, ""))
-        location = ui.paint(f"{finding.path}:{finding.line}", "cyan")
-        suffix = f"  {ui.paint('(' + finding.redacted() + ')', 'grey')}" if finding.redacted() else ""
-        if show_severity:
-            ui.write(f"{location}  {label} {finding.rule}{suffix}")
-        else:
-            ui.write(f"{location}  {finding.rule}{suffix}")
-
-
-def _print_summary(findings: list[Finding]) -> None:
-    counts = {}
-    for finding in findings:
-        counts[finding.severity] = counts.get(finding.severity, 0) + 1
-    parts = [
-        f"{counts[sev]} {sev}" for sev in
-        (detect.CRITICAL, detect.HIGH, detect.MEDIUM, detect.LOW) if counts.get(sev)
+def _load_allowlist(root: Path, explicit: str = "") -> AllowList:
+    candidates = [Path(explicit)] if explicit else [
+        Path.cwd() / ".env-sentry-allow",
+        Path(root) / ".env-sentry-allow",
     ]
-    ui.error(f"{len(findings)} potential secret(s) found ({', '.join(parts)}). "
-             "Review before committing/pushing.")
+    for candidate in candidates:
+        if candidate.is_file():
+            return AllowList.load(candidate)
+    return AllowList([])
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
@@ -194,16 +165,42 @@ def cmd_scan(args: argparse.Namespace) -> int:
         ui.error(f"{root} does not exist.")
         return 1
 
-    allowlist = _load_allowlist(root)
-    findings = detect.scan_path(root, allowlist=allowlist, min_severity=detect.LOW)
+    allowlist = _load_allowlist(root, getattr(args, "allowlist", ""))
+    findings = detect.scan_path(
+        root,
+        allowlist=allowlist,
+        min_severity=args.min_severity,
+        extensions=[e.strip() for e in args.extensions.split(",") if e.strip()] or None,
+        exclude=[e.strip() for e in args.exclude.split(",") if e.strip()],
+    )
+    findings.sort(key=lambda finding: finding.sort_key())
 
-    if not findings:
-        ui.ok("No obvious hardcoded secrets found.")
-        return 0
+    output = getattr(args, "output", "") or ""
+    fmt = getattr(args, "format", "text")
 
-    _render_findings(findings)
-    _print_summary(findings)
-    return 1
+    if fmt == "text":
+        if findings:
+            report.render_text(findings, ui, show_severity=True)
+            ui.error(report.summary_line(findings) + " Review before committing/pushing.")
+        else:
+            ui.ok("No obvious hardcoded secrets found.")
+        if output:
+            Path(output).write_text(report.to_json(findings, VERSION, str(root)) + "\n")
+    else:
+        if fmt == "json":
+            payload = report.to_json(findings, VERSION, str(root))
+        elif fmt == "sarif":
+            payload = report.to_sarif(findings, VERSION)
+        else:
+            payload = report.to_github(findings)
+        if output:
+            Path(output).write_text(payload + "\n")
+            ui.ok(f"Wrote {len(findings)} finding(s) to {output}")
+        elif payload:
+            ui.write(payload, force=True)
+
+    fail_on = getattr(args, "fail_on", "any")
+    return 1 if report.should_fail(findings, fail_on) else 0
 
 
 # ----------------------------------------------------------------------
@@ -284,6 +281,36 @@ def build_parser() -> argparse.ArgumentParser:
     p_scan.add_argument(
         "path", nargs="?", default=".",
         help="Directory to scan (default: current directory)",
+    )
+    p_scan.add_argument(
+        "--format", choices=list(report.FORMATS), default="text",
+        help="Output format: text (default), json, sarif or github",
+    )
+    p_scan.add_argument(
+        "--output", "-o", default="",
+        help="Write results to a file instead of stdout (json/sarif/github)",
+    )
+    p_scan.add_argument(
+        "--min-severity", default=detect.LOW,
+        choices=[detect.LOW, detect.MEDIUM, detect.HIGH, detect.CRITICAL],
+        help="Only report findings at or above this severity (default: low)",
+    )
+    p_scan.add_argument(
+        "--fail-on", default="any",
+        choices=["any", detect.CRITICAL, detect.HIGH, detect.MEDIUM, detect.LOW, "never"],
+        help="Exit non-zero only for findings at or above this severity (default: any)",
+    )
+    p_scan.add_argument(
+        "--allowlist", default="",
+        help="Path to an allowlist file (default: ./.env-sentry-allow if present)",
+    )
+    p_scan.add_argument(
+        "--exclude", default="",
+        help="Comma-separated glob patterns to skip, e.g. 'tests/*,docs/*'",
+    )
+    p_scan.add_argument(
+        "--extensions", default="",
+        help="Comma-separated file extensions to scan, e.g. '.py,.ts' (default: all supported)",
     )
     p_scan.set_defaults(func=cmd_scan)
 
