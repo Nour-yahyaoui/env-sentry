@@ -20,6 +20,7 @@ import json
 
 from . import audit as audit_mod
 from . import badge as badge_mod
+from . import hooks as hooks_mod
 from . import detect, diffing, exporters, gensecrets, lint, report, usage as usage_mod
 from .detect import AllowList, Finding, looks_like_secret
 from .envfile import EnvFile, is_placeholder, parse_env_file
@@ -582,6 +583,51 @@ def cmd_badge(args: argparse.Namespace) -> int:
 
 
 # ----------------------------------------------------------------------
+# git hooks
+# ----------------------------------------------------------------------
+
+def cmd_hooks(args: argparse.Namespace) -> int:
+    root = hooks_mod.repo_root(Path(args.path))
+    if root is None:
+        ui.error("Not inside a git repository.")
+        return 2
+
+    if args.action == "status":
+        state = hooks_mod.status(root)
+        for hook_type, installed in state.items():
+            if installed:
+                ui.ok(f"{hook_type}: env-sentry hook installed")
+            else:
+                ui.info(f"{hook_type}: not installed")
+        return 0
+
+    if args.action == "uninstall":
+        removed = hooks_mod.uninstall(root, args.type)
+        if removed:
+            ui.ok(f"Removed env-sentry block from {args.type}.")
+        else:
+            ui.info(f"No env-sentry block found in {args.type}.")
+        return 0
+
+    commands = [c.strip() for c in args.commands.split(",") if c.strip()] if args.commands else None
+    try:
+        path = hooks_mod.install(root, args.type, commands=commands, version=VERSION,
+                                 force=args.force)
+    except FileExistsError as exc:
+        ui.error(str(exc))
+        return 1
+    except RuntimeError as exc:
+        ui.error(str(exc))
+        return 2
+
+    ui.ok(f"Installed {args.type} hook at {path}")
+    ui.detail("Runs: " + (", ".join(commands) if commands else ", ".join(
+        hooks_mod.DEFAULT_COMMANDS.get(args.type, ("scan",)))))
+    ui.detail("Bypass once with: git commit --no-verify")
+    return 0
+
+
+# ----------------------------------------------------------------------
 # entrypoint
 # ----------------------------------------------------------------------
 
@@ -843,6 +889,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_badge.add_argument("--print", dest="print", action="store_true",
                          help="Also print the SVG to stdout")
     p_badge.set_defaults(func=cmd_badge)
+
+    p_hooks = subparsers.add_parser(
+        "hooks",
+        help="Install/uninstall a git pre-commit or pre-push hook",
+        description="Add a clearly marked env-sentry block to your git hooks so "
+        "leaked secrets never make it into a commit or push.",
+    )
+    p_hooks.add_argument("action", nargs="?", default="status",
+                         choices=["install", "uninstall", "status"],
+                         help="What to do (default: status)")
+    p_hooks.add_argument("--type", default="pre-commit", choices=list(hooks_mod.HOOK_TYPES),
+                         help="Hook to manage (default: pre-commit)")
+    p_hooks.add_argument("--commands", default="",
+                         help="Comma-separated commands to run, e.g. 'check,scan,audit'")
+    p_hooks.add_argument("--force", action="store_true",
+                         help="Append to an existing hook instead of aborting")
+    p_hooks.add_argument("--path", default=".", help="Directory inside the repo (default: .)")
+    p_hooks.set_defaults(func=cmd_hooks)
 
     return parser
 
