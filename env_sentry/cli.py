@@ -17,6 +17,8 @@ import re
 import sys
 from pathlib import Path
 
+from .ui import UI, ui
+
 VERSION = "0.1.4"
 AUTHOR = "Nour Yahyaoui"
 
@@ -60,9 +62,9 @@ def cmd_check(args: argparse.Namespace) -> int:
     exit_code = 0
 
     if not env_path.exists():
-        print(f"⚠️  {env_path} not found (nothing to compare against).")
+        ui.warn(f"{env_path} not found (nothing to compare against).")
     if not example_path.exists():
-        print(f"⚠️  {example_path} not found. Run `env-sentry sync` to create it.")
+        ui.warn(f"{example_path} not found. Run `env-sentry sync` to create it.")
         exit_code = 1
 
     missing_in_example = sorted(set(env_vars) - set(example_vars))
@@ -70,34 +72,34 @@ def cmd_check(args: argparse.Namespace) -> int:
 
     if missing_in_example:
         exit_code = 1
-        print(f"\n❌ Keys in {env_path} but missing from {example_path}:")
+        ui.error(f"Keys in {env_path} but missing from {example_path}:")
         for key in missing_in_example:
-            print(f"   - {key}")
+            ui.bullet(key, "red")
 
     if missing_in_env:
-        print(f"\nℹ️  Keys in {example_path} but not set in {env_path}:")
+        ui.info(f"Keys in {example_path} but not set in {env_path}:")
         for key in missing_in_env:
-            print(f"   - {key}")
+            ui.bullet(key)
 
     # Warn if .env.example contains what looks like a real secret
     suspicious = [k for k, v in example_vars.items() if looks_like_secret(k, v)]
     if suspicious:
         exit_code = 1
-        print(f"\n🚨 {example_path} may contain REAL secret values, not placeholders:")
+        ui.error(f"{example_path} may contain REAL secret values, not placeholders:")
         for key in suspicious:
-            print(f"   - {key}")
-        print("   Replace these with placeholders like `your_api_key_here` before committing.")
+            ui.bullet(key, "red")
+        ui.detail("Replace these with placeholders like `your_api_key_here` before committing.")
 
     # Warn if the env file is not gitignored
     if not is_gitignored(env_path.name):
         exit_code = 1
-        print(f"\n🚨 '{env_path.name}' does not appear to be listed in .gitignore!")
-        print("   Anyone who commits will leak real secrets. Run `env-sentry init` to fix this.")
+        ui.error(f"'{env_path.name}' does not appear to be listed in .gitignore!")
+        ui.detail("Anyone who commits will leak real secrets. Run `env-sentry init` to fix this.")
 
     if exit_code == 0 and env_path.exists():
-        print("✅ .env and .env.example are in sync. .env is git-ignored. Looking good.")
+        ui.ok(f"{env_path} and {example_path} are in sync. {env_path.name} is git-ignored. Looking good.")
     elif exit_code == 0 and not env_path.exists():
-        print(f"\nℹ️  No {env_path} yet — nothing to check. Create one when you're ready.")
+        ui.info(f"No {env_path} yet — nothing to check. Create one when you're ready.")
 
     return exit_code
 
@@ -107,7 +109,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
     example_path = Path(args.example)
 
     if not env_path.exists():
-        print(f"❌ {env_path} not found, nothing to sync from.")
+        ui.error(f"{env_path} not found, nothing to sync from.")
         return 1
 
     env_vars = parse_env_file(env_path)
@@ -116,7 +118,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
         lines.append(f"{key}=your_{key.lower()}_here\n")
 
     example_path.write_text("".join(lines))
-    print(f"✅ Wrote {len(env_vars)} placeholder keys to {example_path}")
+    ui.ok(f"Wrote {len(env_vars)} placeholder keys to {example_path}")
     return 0
 
 
@@ -125,17 +127,17 @@ def cmd_init(args: argparse.Namespace) -> int:
     example_path = Path(args.example)
     if not example_path.exists():
         example_path.write_text("# Copy this file to .env and fill in real values\n")
-        print(f"✅ Created {example_path}")
+        ui.ok(f"Created {example_path}")
     else:
-        print(f"ℹ️  {example_path} already exists, leaving it alone.")
+        ui.info(f"{example_path} already exists, leaving it alone.")
 
     gitignore_path = Path(".gitignore")
     if not is_gitignored(".env"):
         with gitignore_path.open("a") as f:
             f.write("\n.env\n")
-        print("✅ Added '.env' to .gitignore")
+        ui.ok("Added '.env' to .gitignore")
     else:
-        print("ℹ️  '.env' is already git-ignored.")
+        ui.info("'.env' is already git-ignored.")
 
     return exit_code
 
@@ -243,13 +245,13 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 findings = scan_line(line, is_env_file=is_env_file)
                 for finding in findings:
                     total_findings += 1
-                    print(f"{file_path}:{lineno}  {finding}")
+                    ui.write(f"{ui.paint(str(file_path), 'cyan')}:{lineno}  {finding}")
 
     if total_findings == 0:
-        print("✅ No obvious hardcoded secrets found.")
+        ui.ok("No obvious hardcoded secrets found.")
         return 0
     else:
-        print(f"\n🚨 {total_findings} potential secret(s) found. Review before committing/pushing.")
+        ui.error(f"{total_findings} potential secret(s) found. Review before committing/pushing.")
         return 1
 
 
@@ -265,6 +267,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version", action="version",
         version=f"env-sentry {VERSION} — built by {AUTHOR}",
+    )
+    parser.add_argument(
+        "--color", choices=["auto", "always", "never"], default="auto",
+        help="Colourise output (default: auto — only when stdout is a TTY)",
+    )
+    parser.add_argument(
+        "-q", "--quiet", action="store_true",
+        help="Only print warnings and errors",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -329,9 +339,15 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _configure_ui(args: argparse.Namespace) -> None:
+    ui.color = UI(color=None if args.color == "auto" else args.color == "always").color
+    ui.quiet = args.quiet
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    _configure_ui(args)
     return args.func(args)
 
 
