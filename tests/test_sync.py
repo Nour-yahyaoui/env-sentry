@@ -83,3 +83,13 @@ def test_sync_refuses_to_wipe_template_from_empty_env(tmp_path):
     result = run(["sync", "--force"], cwd=tmp_path)
     assert result.returncode == 0
     assert (tmp_path / ".env.example").read_text() != "API_KEY=your_api_key_here\n"
+
+
+def test_sync_check_compares_key_coverage_not_formatting(tmp_path):
+    (tmp_path / ".env").write_text("API_KEY=realvalue123\nPORT=8080\n")
+    (tmp_path / ".env.example").write_text(
+        "# hand-written template\nAPI_KEY=your_api_key_here\nPORT=8080\n"
+    )
+    result = run(["sync", "--check"], cwd=tmp_path)
+    assert result.returncode == 0
+    assert "covers every key" in result.stdout

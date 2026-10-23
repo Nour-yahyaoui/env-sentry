@@ -192,14 +192,15 @@ def cmd_sync(args: argparse.Namespace) -> int:
     unchanged = previous == rendered
 
     if args.check:
-        if unchanged:
-            ui.ok(f"{example_path} is already up to date ({len(env)} keys).")
+        existing_keys = set(EnvFile.load(example_path).keys()) if example_path.exists() else set()
+        missing = [key for key in env.keys() if key not in existing_keys]
+        if not missing:
+            ui.ok(f"{example_path} covers every key in {env_path} ({len(env)} keys).")
             return 0
-        ui.error(f"{example_path} is stale — run `env-sentry sync` to refresh it.")
-        if previous is not None:
-            old_keys = set(EnvFile.parse(previous).keys())
-            for key in sorted(set(env.keys()) - old_keys):
-                ui.bullet(f"missing: {key}", "red")
+        ui.error(f"{example_path} is stale — {len(missing)} key(s) missing. "
+                 "Run `env-sentry sync` to refresh it.")
+        for key in missing:
+            ui.bullet(f"missing: {key}", "red")
         return 1
 
     if args.dry_run:
