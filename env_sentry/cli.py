@@ -32,10 +32,10 @@ from . import stats as stats_mod
 from . import templates as templates_mod
 from . import watch as watch_mod
 from . import detect, diffing, exporters, gensecrets, lint, report, usage as usage_mod
-from .detect import AllowList, Finding, looks_like_secret
-from .envfile import EnvFile, is_placeholder, parse_env_file
+from .detect import AllowList, looks_like_secret
+from .envfile import EnvFile, is_placeholder
 from .gitignore import GitIgnore
-from .scanner import DEFAULT_IGNORE_DIRS, staged_files
+from .scanner import staged_files
 from .ui import UI, ui
 
 VERSION = "0.1.4"
@@ -175,7 +175,6 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
     if args.merge and example_path.exists():
         existing = EnvFile.load(example_path)
-        known = set(existing.keys())
         extra = [(key, value) for key, value in existing.values().items() if key not in env]
         if extra:
             rendered = rendered.rstrip("\n") + "\n"

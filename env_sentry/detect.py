@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
-from .envfile import PLACEHOLDER_RE, is_placeholder
+from .envfile import is_placeholder
 
 # ----------------------------------------------------------------------
 # severities

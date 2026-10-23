@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Dict, Sequence
 
 from .envfile import EnvFile
 from .redact import mask_value

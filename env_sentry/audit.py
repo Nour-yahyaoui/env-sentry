@@ -12,7 +12,7 @@ import stat
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional
 
 from . import lint
 from .detect import AllowList, looks_like_secret, scan_file

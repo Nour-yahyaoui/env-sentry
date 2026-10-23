@@ -7,7 +7,7 @@ you can commit next to your README and update in CI.
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Optional
 from xml.sax.saxutils import escape
 
 FONT = "Verdana,Geneva,DejaVu Sans,sans-serif"
@@ -45,9 +45,9 @@ def render(
     total_width = label_width + message_width
     radius = 3 if style != "flat-square" else 0
     gradient = (
-        f'<linearGradient id="s" x2="0" y2="100%">'
-        f'<stop offset="0" stop-color="#bbb" stop-opacity=".1"/>'
-        f'<stop offset="1" stop-opacity=".1"/></linearGradient>'
+        '<linearGradient id="s" x2="0" y2="100%">'
+        '<stop offset="0" stop-color="#bbb" stop-opacity=".1"/>'
+        '<stop offset="1" stop-opacity=".1"/></linearGradient>'
         if style != "flat-square" else ""
     )
     title = escape(f"{label}: {message}")

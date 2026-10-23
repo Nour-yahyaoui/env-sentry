@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import secrets
 import string
-from typing import List, Optional
+from typing import List
 
 # Deliberately unambiguous: no 0/O, 1/l/I.
 ALNUM = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
@@ -94,8 +94,6 @@ def strength(value: str) -> int:
     """Rough 0-100 strength score, used for friendly feedback."""
     if not value:
         return 0
-    import math
-
     from .detect import shannon_entropy
 
     entropy = shannon_entropy(value) * len(value)

@@ -12,9 +12,9 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence
+from typing import Dict, List, Optional
 
-from .detect import HIGH, SEVERITY_RANK, AllowList, Finding, scan_text
+from .detect import HIGH, SEVERITY_RANK, AllowList, scan_text
 
 COMMIT_RE = re.compile(r"^[0-9a-f]{7,40}$")
 DIFF_FILE_RE = re.compile(r"^\+\+\+ b/(.+)$")
