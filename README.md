@@ -134,11 +134,12 @@ Every finding has a **severity** so you can gate precisely:
 ```bash
 env-sentry scan . --min-severity high --fail-on critical
 env-sentry scan . --staged                  # fast pre-commit mode
+env-sentry scan . --include-ignored         # also check git-ignored files
 env-sentry scan . --format sarif -o out.sarif   # GitHub code scanning
 env-sentry scan . --format github           # inline PR annotations
 ```
 
-**False positives are handled properly:** placeholder values, `os.environ[...]` lookups, `max_tokens`-style counts, `get_token()` calls and test fixtures are ignored. When you *do* need an exception, use either an inline marker or an allowlist:
+**False positives are handled properly:** placeholder values, `os.environ[...]` lookups, `max_tokens`-style counts, `get_token()` calls, documentation URLs like `postgres://user:password@localhost/db`, `${VAR}` templates and test fixtures are ignored. When you *do* need an exception, use either an inline marker or an allowlist:
 
 ```python
 DEMO_KEY = "AKIAIOSFODNN7EXAMPLE"  # env-sentry:ignore
@@ -348,7 +349,9 @@ CLI flags always win over config values.
 ## Performance notes
 
 - Only text files are read (binary sniffing + 2 MB cap), symlinks are never followed.
-- Vendor/build directories and `.gitignore`d paths are skipped — except `.env*`, which you actually want checked.
+- Files excluded by `.gitignore` are skipped: they cannot be committed, so
+  flagging your own local `.env` would just make every hook run fail. Use
+  `--include-ignored` when you want to audit those files too.
 - `--staged` makes pre-commit runs proportional to what you staged, not repo size.
 - `history --depth N` bounds the git walk.
 
