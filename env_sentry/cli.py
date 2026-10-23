@@ -531,15 +531,22 @@ def cmd_export(args: argparse.Namespace) -> int:
 # generate secrets
 # ----------------------------------------------------------------------
 
-def _gen_targets(env: EnvFile, keys: list[str], force: bool) -> list[str]:
+def _gen_targets(env: EnvFile, keys: list[str], force: bool, all_keys: bool = False
+                 ) -> tuple[list[str], list[str]]:
+    """Return (keys to generate, keys skipped because they are not secrets)."""
     if keys:
-        return keys
+        return keys, []
     if force:
-        return [entry.key for entry in env.entries]
-    return [
+        return [entry.key for entry in env.entries], []
+    candidates = [
         entry.key for entry in env.entries
         if entry.value == "" or is_placeholder(entry.value)
     ]
+    if all_keys:
+        return candidates, []
+    targets = [key for key in candidates if gensecrets.is_secret_key(key)]
+    skipped = [key for key in candidates if key not in targets]
+    return targets, skipped
 
 
 def cmd_generate(args: argparse.Namespace) -> int:
@@ -549,19 +556,29 @@ def cmd_generate(args: argparse.Namespace) -> int:
         ui.error("--length must be at least 4")
         return 2
 
+    seeded = False
     if not env_path.exists():
-        if not args.keys:
+        example_path = Path(args.example)
+        if example_path.exists() and not args.keys:
+            env = EnvFile.load(example_path)
+            seeded = True
+            ui.info(f"{env_path} not found; seeding it from {example_path}.")
+        elif not args.keys:
             ui.error(f"{env_path} not found. Create it with `env-sentry init`, "
                      "or pass --key NAME to print a standalone value.")
             return 2
-        env = EnvFile([], path=env_path, exists=False)
+        else:
+            env = EnvFile([], path=env_path, exists=False)
     else:
         env = EnvFile.load(env_path)
 
-    targets = _gen_targets(env, args.keys, args.force)
+    targets, skipped = _gen_targets(env, args.keys, args.force, all_keys=args.all_keys)
+    if skipped:
+        ui.detail("Not secret-shaped, left as-is: " + ", ".join(skipped[:6])
+                  + ("…" if len(skipped) > 6 else ""))
     if not targets:
-        ui.ok("Nothing to generate: no empty or placeholder values found "
-              "(use --force to overwrite existing values).")
+        ui.ok("Nothing to generate: no empty or placeholder secrets found "
+              "(use --force to overwrite existing values, or --all-keys).")
         return 0
 
     generated = {}
@@ -580,7 +597,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
         ui.info(f"Dry run: would write {len(generated)} value(s) to {env_path}.")
         return 0
 
-    if env.exists:
+    if env.exists or seeded:
         for entry in env.entries:
             if entry.key in generated:
                 entry.value = generated[entry.key]
@@ -1410,6 +1427,10 @@ def build_parser() -> argparse.ArgumentParser:
         "still say 'your_api_key_here'. Uses secrets module CSPRNG.",
     )
     p_gen.add_argument("--env", default=".env", help="Env file to update (default: .env)")
+    p_gen.add_argument("--example", default=".env.example",
+                       help="Seed .env from this file when it does not exist yet")
+    p_gen.add_argument("--all-keys", action="store_true",
+                       help="Generate for every empty key, not just secret-shaped ones")
     p_gen.add_argument("--key", dest="keys", action="append", default=[],
                        help="Only (re)generate this key; repeatable")
     p_gen.add_argument("--length", type=int, default=32, help="Value length (default: 32)")

@@ -90,6 +90,18 @@ def passphrase(words: int = 4, separator: str = "-", capitalize: bool = False,
     return phrase
 
 
+SECRET_WORDS = ("key", "token", "secret", "password", "passwd", "pwd", "auth",
+                "credential", "salt", "hmac", "signature", "dsn", "connection")
+
+
+def is_secret_key(key: str) -> bool:
+    """Does this key plausibly need a generated credential?"""
+    lowered = key.lower()
+    if any(word in lowered for word in SECRET_WORDS):
+        return True
+    return False
+
+
 def strength(value: str) -> int:
     """Rough 0-100 strength score, used for friendly feedback."""
     if not value:

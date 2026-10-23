@@ -58,8 +58,33 @@ def test_cli_fills_placeholders(tmp_path):
     assert "# app" in text
     assert stat.S_IMODE(env.stat().st_mode) == 0o600
     for line in text.splitlines():
-        if line.startswith(("API_KEY", "EMPTY")):
+        if line.startswith("API_KEY"):
             assert len(line.split("=", 1)[1]) == 24
+    # non-secret names are left alone unless --all-keys is used
+    assert "EMPTY=\n" in text
+
+
+def test_all_keys_fills_non_secret_names(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("APP_NAME=\nAPI_KEY=\n")
+    run(["gen", "--all-keys", "--length", "20"], cwd=tmp_path)
+    text = env.read_text()
+    for line in text.splitlines():
+        assert len(line.split("=", 1)[1]) == 20
+
+
+def test_seeds_env_from_example_when_missing(tmp_path):
+    (tmp_path / ".env.example").write_text(
+        "APP_NAME=my-app\nAPI_KEY=your_api_key_here\nDB_PASSWORD=\n"
+    )
+    result = run(["gen", "--length", "20"], cwd=tmp_path)
+    assert result.returncode == 0
+    assert "seeding it from .env.example" in result.stdout
+    text = (tmp_path / ".env").read_text()
+    assert "my-app" in text
+    lines = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
+    assert len(lines["API_KEY"]) == 20
+    assert "-" in lines["DB_PASSWORD"]  # password keys become passphrases
 
 
 def test_cli_dry_run_does_not_write(tmp_path):
