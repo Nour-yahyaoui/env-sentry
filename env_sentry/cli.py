@@ -37,9 +37,8 @@ from .envfile import EnvFile, is_placeholder
 from .gitignore import GitIgnore
 from .scanner import staged_files
 from .ui import UI, ui
+from . import __author__ as AUTHOR, __version__ as VERSION
 
-VERSION = "0.1.4"
-AUTHOR = "Nour Yahyaoui"
 
 # ----------------------------------------------------------------------
 # .env parsing helpers

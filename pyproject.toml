@@ -4,15 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "env-sentry"
-version = "0.1.4"
-description = "A tiny, zero-dependency CLI that keeps your .env setup safe and in sync."
+version = "1.0.0"
+description = "The zero-dependency .env toolkit: lint, diff, audit, scan, generate and stop secrets from leaking."
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
 authors = [{ name = "nour yahyaoui" }]
-keywords = ["env", "dotenv", "security", "secrets", "cli", "devtools"]
+keywords = ["env", "dotenv", "security", "secrets", "cli", "devtools", "scanner", "ci"]
 classifiers = [
     "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
