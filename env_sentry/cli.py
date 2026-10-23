@@ -12,6 +12,7 @@ Commands:
 from __future__ import annotations
 
 import argparse
+import datetime
 import re
 import sys
 from pathlib import Path
@@ -28,6 +29,7 @@ from . import hooks as hooks_mod
 from . import merge as merge_mod
 from . import stats as stats_mod
 from . import templates as templates_mod
+from . import watch as watch_mod
 from . import detect, diffing, exporters, gensecrets, lint, report, usage as usage_mod
 from .detect import AllowList, Finding, looks_like_secret
 from .envfile import EnvFile, is_placeholder, parse_env_file
@@ -1068,6 +1070,53 @@ def cmd_history(args: argparse.Namespace) -> int:
 
 
 # ----------------------------------------------------------------------
+# watch
+# ----------------------------------------------------------------------
+
+def _watch_pass(args: argparse.Namespace) -> int:
+    stamp = datetime.datetime.now().strftime("%H:%M:%S")
+    ui.header(f"[{stamp}] checking {args.env}")
+    code = cmd_check(argparse.Namespace(env=args.env, example=args.example,
+                                        strict=args.strict, format="text"))
+    if args.scan:
+        scan_args = argparse.Namespace(
+            path=".", format="text", output="", min_severity=detect.HIGH,
+            fail_on="high", allowlist="", exclude="", extensions="",
+        )
+        code |= cmd_scan(scan_args)
+    return code
+
+
+def cmd_watch(args: argparse.Namespace) -> int:
+    if not Path(args.env).exists() and not Path(args.example).exists():
+        ui.error(f"Neither {args.env} nor {args.example} exists here.")
+        return 2
+
+    paths = watch_mod.files_to_watch(Path.cwd())
+    ui.info(f"Watching {len(paths)} file(s): " + ", ".join(path.name for path in paths))
+    ui.detail("Press Ctrl+C to stop.")
+
+    _watch_pass(args)
+    if args.once:
+        return 0
+
+    try:
+        while True:
+            changed = watch_mod.wait_for_change(
+                lambda: watch_mod.files_to_watch(Path.cwd()), interval=args.interval
+            )
+            if changed:
+                names = ", ".join(path.name for path in changed)
+                ui.write("")
+                ui.info(f"changed: {names}")
+                _watch_pass(args)
+    except KeyboardInterrupt:
+        ui.write("")
+        ui.info("Stopped watching.")
+        return 0
+
+
+# ----------------------------------------------------------------------
 # entrypoint
 # ----------------------------------------------------------------------
 
@@ -1505,6 +1554,23 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Output format (default: text)")
     p_history.add_argument("--output", "-o", default="", help="Write results to a file")
     p_history.set_defaults(func=cmd_history)
+
+    p_watch = subparsers.add_parser(
+        "watch",
+        help="Re-run checks whenever an env file changes",
+        description="Poll .env* files and re-run `check` (plus an optional "
+        "high-severity scan) on every change. Ideal while editing secrets.",
+    )
+    p_watch.add_argument("--env", default=".env", help="Env file to watch (default: .env)")
+    p_watch.add_argument("--example", default=".env.example", help="Example file to compare")
+    p_watch.add_argument("--interval", type=float, default=1.0,
+                         help="Poll interval in seconds (default: 1.0)")
+    p_watch.add_argument("--strict", action="store_true", help="Use strict check mode")
+    p_watch.add_argument("--no-scan", dest="scan", action="store_false",
+                         help="Skip the secret scan on each change")
+    p_watch.add_argument("--once", action="store_true",
+                         help="Run a single check pass and exit")
+    p_watch.set_defaults(func=cmd_watch, scan=True)
 
     return parser
 
