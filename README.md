@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](pyproject.toml)
-[![Tests](https://img.shields.io/badge/tests-211%20passing-brightgreen)](tests/)
+[![Tests](https://img.shields.io/badge/tests-218%20passing-brightgreen)](tests/)
 
 Every project with a `.env` file eventually has one of these moments:
 

@@ -84,13 +84,24 @@ keeps working; everything else is additive.
 - **`.env` parser** — quotes (single/double with escapes), multi-line values,
   `export` prefixes, inline comments, duplicate detection, round-trip safe.
 
+### Safety and correctness fixes
+
+- `scan` skips `.gitignore`d files (a git-ignored `.env` can't leak, and
+  flagging it made every pre-commit run fail); `--include-ignored` audits them.
+- Documentation credentials (`postgres://user:password@localhost/...`,
+  `your_*_here`, `<placeholder>`, `${VAR}`) no longer raise findings.
+- `sync` refuses to wipe a hand-written template when `.env` has no keys, and
+  `sync --check` validates key coverage instead of formatting.
+- `gen` only fills credential-shaped keys and never touches numeric or
+  config-suffixed keys (`MAX_TOKENS`, `ACCESS_TOKEN_EXPIRE_MINUTES`).
+
 ### CLI polish
 
 - Colour output with `NO_COLOR`/`FORCE_COLOR` support and `--color`
   `auto|always|never`; `-q/--quiet`.
 - `python -m env_sentry` entrypoint.
 - Version and author are defined once in `env_sentry/__init__.py`.
-- 211 tests, pyflakes-clean package.
+- 218 tests, pyflakes-clean package.
 
 ## 0.1.4
 
