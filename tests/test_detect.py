@@ -113,3 +113,32 @@ def test_min_severity_filtering(tmp_path):
     high_findings = detect.scan_path(tmp_path, min_severity=detect.CRITICAL)
     assert all_findings
     assert not high_findings
+
+
+def test_gitignored_files_are_skipped_unless_requested(tmp_path):
+    (tmp_path / ".gitignore").write_text(".env\n")
+    (tmp_path / ".env").write_text('SECRET_KEY = "' + "a" * 32 + '"\n')
+    (tmp_path / "app.py").write_text("x = 1\n")
+
+    assert detect.scan_path(tmp_path) == []
+    assert detect.scan_path(tmp_path, include_ignored=True)
+
+
+def test_documentation_urls_are_not_flagged(tmp_path):
+    findings = scan_text(
+        "DATABASE_URL=postgres://user:password@localhost:5432/app\n"
+        "REDIS_URL=redis://localhost:6379\n"
+        "API_KEY=your_api_key_here\n"
+    , is_env_file=True)
+    assert findings == []
+
+
+def test_numeric_config_keys_are_not_generated():
+    from env_sentry.gensecrets import is_secret_key
+
+    assert is_secret_key("API_KEY")
+    assert is_secret_key("DB_PASSWORD")
+    assert not is_secret_key("ACCESS_TOKEN_EXPIRE_MINUTES")
+    assert not is_secret_key("MAX_TOKENS")
+    assert not is_secret_key("JWT_SECRET_URL")
+    assert not is_secret_key("APP_NAME")

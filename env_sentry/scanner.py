@@ -100,6 +100,7 @@ def iter_files(
     extensions: Optional[Sequence[str]] = None,
     exclude: Sequence[str] = (),
     respect_gitignore: bool = True,
+    include_ignored: bool = False,
     max_bytes: int = MAX_FILE_BYTES,
 ) -> Iterator[Path]:
     """Yield candidate files under ``root`` in a stable order."""
@@ -137,7 +138,9 @@ def iter_files(
                 continue
             if not is_scannable(file_path, extensions):
                 continue
-            if gitignore and not is_env_name(filename) and gitignore.is_ignored(rel):
+            if gitignore and not include_ignored and gitignore.is_ignored(rel):
+                # Ignored files cannot be committed, so scanning them only
+                # produces noise — unless the user explicitly asks for them.
                 continue
             try:
                 if file_path.stat().st_size > max_bytes:

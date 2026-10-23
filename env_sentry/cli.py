@@ -347,6 +347,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
             min_severity=args.min_severity,
             extensions=[e.strip() for e in args.extensions.split(",") if e.strip()] or None,
             exclude=[e.strip() for e in args.exclude.split(",") if e.strip()],
+            include_ignored=getattr(args, "include_ignored", False),
         )
     findings.sort(key=lambda finding: finding.sort_key())
 
@@ -540,7 +541,8 @@ def _gen_targets(env: EnvFile, keys: list[str], force: bool, all_keys: bool = Fa
         return [entry.key for entry in env.entries], []
     candidates = [
         entry.key for entry in env.entries
-        if entry.value == "" or is_placeholder(entry.value)
+        if (entry.value == "" or is_placeholder(entry.value))
+        and not entry.value.replace(".", "", 1).isdigit()
     ]
     if all_keys:
         return candidates, []
@@ -1343,6 +1345,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_scan.add_argument(
         "--exclude", default="",
         help="Comma-separated glob patterns to skip, e.g. 'tests/*,docs/*'",
+    )
+    p_scan.add_argument(
+        "--include-ignored", action="store_true",
+        help="Also scan files excluded by .gitignore (including your real .env)",
     )
     p_scan.add_argument(
         "--staged", action="store_true",

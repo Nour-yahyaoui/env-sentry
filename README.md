@@ -35,19 +35,23 @@ Works on Python 3.8+ on Linux, macOS and Windows. No third-party packages, ever.
 ## 60-second quick start
 
 ```bash
-# 1. Scaffold .env.example, git-ignore .env, and get a health score
+# 1. Scaffold .env.example from a stack template + git-ignore every .env variant
 env-sentry init --template fastapi
-env-sentry audit
 
-# 2. Scan the whole repo for hardcoded credentials
-env-sentry scan
-
-# 3. Fill in strong random values for anything still empty or "your_api_key_here"
+# 2. Seed .env from the template and generate strong values for its secrets
 env-sentry gen
 
-# 4. Not sure which keys nothing uses anymore?
+# 3. Confirm everything is in sync and nothing is leaking
+env-sentry check && env-sentry scan
+
+# 4. Score it, then see which keys nothing actually uses
+env-sentry audit
 env-sentry usage
 ```
+
+Two commands in and you already have a real `.env`: `gen` copies the
+template's non-secret defaults (names, ports, URLs) and replaces every
+`your_*_here` credential with a CSPRNG value.
 
 ---
 
@@ -247,6 +251,7 @@ $ env-sentry gen
 env-sentry gen --key DB_PASSWORD --passphrase      # ember-falcon-quartz-tide
 env-sentry gen --key HMAC_SALT --charset hex --length 64
 env-sentry gen --dry-run --print                   # preview without writing
+env-sentry gen --all-keys                          # also fill non-secret empty keys
 ```
 
 CSPRNG-backed (`secrets`, never `random`), unambiguous alphabets (no `0/O/1/l`), and per-key heuristics: password keys get passphrases, salt/HMAC keys get hex.

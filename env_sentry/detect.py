@@ -232,6 +232,26 @@ def looks_like_secret(key: str, value: str, is_literal: bool = True) -> bool:
 
 IGNORE_MARKERS = ("env-sentry:ignore", "env-sentry: allow", "nosec", "gitleaks:allow")
 
+# Values that are clearly documentation rather than a real credential.
+FAKE_TOKENS = ("your_", "changeme", "change-me", "placeholder", "<", "${")
+DEMO_PASSWORDS = {"password", "pass", "pwd", "secret", "changeme", "your_password",
+                  "your_password_here", "postgres", "root", "admin"}
+
+
+def _demo_userinfo(value: str) -> bool:
+    """``postgres://user:password@localhost/db`` is documentation, not a leak."""
+    match = re.match(r"[a-z][a-z0-9+.-]*://([^:/@\s]+):([^@/\s]+)@", value, re.IGNORECASE)
+    if not match:
+        return False
+    return match.group(2).lower() in DEMO_PASSWORDS or "your_" in match.group(2).lower()
+
+
+def _looks_like_documentation(value: str) -> bool:
+    lowered = value.lower()
+    if _demo_userinfo(value):
+        return True
+    return any(token in lowered for token in FAKE_TOKENS)
+
 
 @dataclass
 class Finding:
@@ -318,6 +338,8 @@ def scan_line_detail(line: str, is_env_file: bool = False) -> List[Tuple[str, st
         if key in seen:
             return
         seen.add(key)
+        if value and _looks_like_documentation(value):
+            return
         found.append((name, severity, value, column))
 
     for rule in SIGNATURE_RULES:
@@ -415,13 +437,14 @@ def scan_files(paths: Iterable[Path], allowlist: Optional[AllowList] = None,
 
 def scan_path(root: Path, allowlist: Optional[AllowList] = None,
               min_severity: str = LOW, extensions: Optional[Sequence[str]] = None,
-              exclude: Sequence[str] = ()) -> List[Finding]:
+              exclude: Sequence[str] = (), include_ignored: bool = False) -> List[Finding]:
     """Walk ``root`` and return findings at or above ``min_severity``."""
     from .scanner import iter_files  # local import avoids a cycle
 
     threshold = SEVERITY_RANK.get(min_severity, 0)
     findings: List[Finding] = []
-    for file_path in iter_files(Path(root), extensions=extensions, exclude=exclude):
+    for file_path in iter_files(Path(root), extensions=extensions, exclude=exclude,
+                                include_ignored=include_ignored):
         for finding in scan_file(file_path, allowlist=allowlist):
             if SEVERITY_RANK.get(finding.severity, 0) >= threshold:
                 findings.append(finding)

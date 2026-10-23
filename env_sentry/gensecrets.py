@@ -94,12 +94,25 @@ SECRET_WORDS = ("key", "token", "secret", "password", "passwd", "pwd", "auth",
                 "credential", "salt", "hmac", "signature", "dsn", "connection")
 
 
+# Keys that mention a secret word but are really configuration.
+CONFIG_SUFFIXES = (
+    "minutes", "seconds", "hours", "days", "ttl", "expiry", "expires", "expiration",
+    "length", "count", "counts", "size", "sizes", "limit", "limits", "timeout",
+    "timeouts", "interval", "port", "ports", "url", "uri", "host", "path", "dir",
+    "file", "algorithm", "format", "version", "enabled", "required", "name",
+    "type", "prefix", "header", "policy", "mode", "endpoint",
+    "tokens", "keys", "secrets", "passwords",
+)
+
+
 def is_secret_key(key: str) -> bool:
     """Does this key plausibly need a generated credential?"""
     lowered = key.lower()
-    if any(word in lowered for word in SECRET_WORDS):
-        return True
-    return False
+    if lowered.rsplit("_", 1)[-1] in CONFIG_SUFFIXES:
+        return False
+    if lowered.endswith(tuple("_" + suffix for suffix in CONFIG_SUFFIXES)):
+        return False
+    return any(word in lowered for word in SECRET_WORDS)
 
 
 def strength(value: str) -> int:
