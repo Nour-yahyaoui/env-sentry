@@ -20,6 +20,7 @@ import json
 
 from . import audit as audit_mod
 from . import badge as badge_mod
+from . import config as config_mod
 from . import hooks as hooks_mod
 from . import merge as merge_mod
 from . import stats as stats_mod
@@ -775,6 +776,48 @@ def cmd_stats(args: argparse.Namespace) -> int:
 
 
 # ----------------------------------------------------------------------
+# config
+# ----------------------------------------------------------------------
+
+def cmd_config(args: argparse.Namespace) -> int:
+    if args.init:
+        target = Path(args.output or config_mod.FILENAMES[0])
+        if target.exists() and not args.force:
+            ui.error(f"{target} already exists (use --force to overwrite).")
+            return 1
+        config_mod.Config({}).write(target)
+        ui.ok(f"Wrote starter config to {target}")
+        return 0
+
+    cfg = config_mod.Config.load(Path.cwd())
+    if args.format == "json":
+        ui.write(json.dumps(cfg.to_dict(), indent=2), force=True)
+        return 0
+
+    if cfg.path:
+        ui.header(f"Config: {cfg.path}")
+        for key in sorted(cfg.data):
+            value = cfg.data[key]
+            rendered = ", ".join(value) if isinstance(value, list) else value
+            ui.write(f"  {key.ljust(14)} {rendered}")
+    else:
+        ui.info("No .env-sentry.json found; built-in defaults are in effect.")
+        ui.detail("Create one with: env-sentry config --init")
+        ui.header("Built-in / configurable keys")
+        for key in sorted(config_mod.KNOWN_KEYS):
+            ui.write(f"  {key.ljust(14)} {config_mod.KNOWN_KEYS[key].__name__}")
+
+    warnings = cfg.warnings()
+    for message in warnings:
+        ui.warn(message)
+
+    if cfg.path and cfg.data:
+        ui.write("")
+        ui.detail(f"CLI flags always win over values in {cfg.path.name}.")
+    return 0
+
+
+# ----------------------------------------------------------------------
 # entrypoint
 # ----------------------------------------------------------------------
 
@@ -1102,6 +1145,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_stats.add_argument("--output", "-o", default="", help="Write results to a file")
     p_stats.set_defaults(func=cmd_stats)
 
+    p_config = subparsers.add_parser(
+        "config",
+        help="Show or create .env-sentry.json defaults",
+        description="Inspect the project config that supplies defaults for "
+        "--env, --example, --exclude, --min-severity, --fail-on and friends.",
+    )
+    p_config.add_argument("--init", action="store_true", help="Write a starter config")
+    p_config.add_argument("--force", action="store_true", help="Overwrite an existing config")
+    p_config.add_argument("--output", "-o", default="", help="Config path for --init")
+    p_config.add_argument("--format", choices=["text", "json"], default="text",
+                          help="Output format (default: text)")
+    p_config.set_defaults(func=cmd_config)
+
     return parser
 
 
@@ -1112,7 +1168,10 @@ def _configure_ui(args: argparse.Namespace) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
+    argv = list(sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(argv)
+    if args.command != "config":
+        config_mod.apply(args, config_mod.Config.load(Path.cwd()), argv)
     _configure_ui(args)
     return args.func(args)
 
