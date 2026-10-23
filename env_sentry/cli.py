@@ -24,6 +24,7 @@ from . import badge as badge_mod
 from . import cicd
 from . import completions as completions_mod
 from . import config as config_mod
+from . import doctor as doctor_mod
 from . import history as history_mod
 from . import hooks as hooks_mod
 from . import merge as merge_mod
@@ -1126,6 +1127,47 @@ def cmd_watch(args: argparse.Namespace) -> int:
 
 
 # ----------------------------------------------------------------------
+# doctor
+# ----------------------------------------------------------------------
+
+DOCTOR_STYLE = {doctor_mod.OK: ("✅", "green"), doctor_mod.WARN: ("⚠️ ", "yellow"),
+                doctor_mod.INFO: ("• ", "grey")}
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    root = Path(args.path)
+    facts = doctor_mod.diagnose(root, VERSION)
+
+    if args.format == "json":
+        payload = json.dumps({"facts": [fact.to_dict() for fact in facts],
+                              "suggestions": doctor_mod.suggestions(facts)}, indent=2)
+        if args.output:
+            Path(args.output).write_text(payload + "\n")
+            ui.ok(f"Wrote diagnostics to {args.output}")
+        else:
+            ui.write(payload, force=True)
+        return 0
+
+    ui.header(f"env-sentry doctor — {root}")
+    for fact in facts:
+        symbol, colour = DOCTOR_STYLE.get(fact.status, ("• ", "grey"))
+        ui.write(f"{symbol} {ui.paint(fact.label.ljust(18), 'cyan')} {fact.value}")
+        if fact.hint and fact.status == doctor_mod.WARN:
+            ui.detail(f"↳ {fact.hint}")
+
+    advice = doctor_mod.suggestions(facts)
+    if advice:
+        ui.write("")
+        ui.warn(f"{len(advice)} suggestion(s):")
+        for item in advice:
+            ui.bullet(item, "yellow")
+    else:
+        ui.write("")
+        ui.ok("Everything looks healthy.")
+    return 0
+
+
+# ----------------------------------------------------------------------
 # entrypoint
 # ----------------------------------------------------------------------
 
@@ -1584,6 +1626,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_watch.add_argument("--once", action="store_true",
                          help="Run a single check pass and exit")
     p_watch.set_defaults(func=cmd_watch, scan=True)
+
+    p_doctor = subparsers.add_parser(
+        "doctor",
+        help="Diagnose your local setup",
+        description="Print the facts that explain why a check or hook behaves "
+        "the way it does: python, git, hooks, config, permissions and CI wiring.",
+    )
+    p_doctor.add_argument("path", nargs="?", default=".", help="Project root (default: .)")
+    p_doctor.add_argument("--format", choices=["text", "json"], default="text",
+                          help="Output format (default: text)")
+    p_doctor.add_argument("--output", "-o", default="", help="Write results to a file")
+    p_doctor.set_defaults(func=cmd_doctor)
 
     return parser
 
