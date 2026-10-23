@@ -21,6 +21,7 @@ import json
 from . import audit as audit_mod
 from . import badge as badge_mod
 from . import cicd
+from . import completions as completions_mod
 from . import config as config_mod
 from . import hooks as hooks_mod
 from . import merge as merge_mod
@@ -988,6 +989,26 @@ def cmd_ci(args: argparse.Namespace) -> int:
 
 
 # ----------------------------------------------------------------------
+# shell completions
+# ----------------------------------------------------------------------
+
+def cmd_completions(args: argparse.Namespace) -> int:
+    try:
+        script = completions_mod.render(args.shell, build_parser(), "env-sentry")
+    except ValueError as exc:
+        ui.error(str(exc))
+        return 2
+
+    if args.output:
+        Path(args.output).write_text(script)
+        ui.ok(f"Wrote {args.shell} completion to {args.output}")
+        ui.detail(completions_mod.INSTALL_HINTS[args.shell])
+    else:
+        ui.write(script, force=True)
+    return 0
+
+
+# ----------------------------------------------------------------------
 # entrypoint
 # ----------------------------------------------------------------------
 
@@ -1389,6 +1410,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_ci.add_argument("--output", "-o", default="", help="Custom output path")
     p_ci.add_argument("--force", action="store_true", help="Overwrite an existing file")
     p_ci.set_defaults(func=cmd_ci)
+
+    p_comp = subparsers.add_parser(
+        "completions",
+        help="Print a shell completion script",
+        description="Generate bash/zsh/fish completions straight from the CLI "
+        "definition, so they never go stale.",
+    )
+    p_comp.add_argument("shell", nargs="?", default="bash",
+                        choices=list(completions_mod.SHELLS),
+                        help="Shell to generate for (default: bash)")
+    p_comp.add_argument("--output", "-o", default="",
+                        help="Write the script to a file instead of stdout")
+    p_comp.set_defaults(func=cmd_completions)
 
     return parser
 
