@@ -48,8 +48,10 @@ def test_syntax_error_and_key_style():
     assert "key-style" in codes("camelKey=1\n")
 
 
-def test_no_keys():
-    assert "no-keys" in codes("# only comments\n")
+def test_no_keys_is_a_warning():
+    issues = lint.lint_text("# only comments\n")
+    assert [issue.code for issue in issues] == ["no-keys"]
+    assert issues[0].level == lint.WARNING
 
 
 def test_missing_file(tmp_path):

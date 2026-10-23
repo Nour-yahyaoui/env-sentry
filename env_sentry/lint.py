@@ -120,7 +120,8 @@ def lint_text(text: str) -> List[Issue]:
         index += consumed
 
     if not EnvFile.parse(text).entries and text.strip():
-        issues.append(Issue(1, ERROR, "no-keys", "no KEY=value pairs found"))
+        issues.append(Issue(1, WARNING, "no-keys",
+                            "no KEY=value pairs found (a fresh .env is fine, this is just a heads-up)"))
 
     return issues
 

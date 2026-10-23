@@ -70,3 +70,16 @@ def test_sync_output_passes_check(tmp_path):
     (tmp_path / ".gitignore").write_text(".env\n")
     run(["sync"], cwd=tmp_path)
     assert run(["check"], cwd=tmp_path).returncode == 0
+
+
+def test_sync_refuses_to_wipe_template_from_empty_env(tmp_path):
+    (tmp_path / ".env").write_text("# just a comment\n")
+    (tmp_path / ".env.example").write_text("API_KEY=your_api_key_here\n")
+    result = run(["sync"], cwd=tmp_path)
+    assert result.returncode == 1
+    assert "has no KEY=value pairs" in result.stdout
+    assert (tmp_path / ".env.example").read_text() == "API_KEY=your_api_key_here\n"
+
+    result = run(["sync", "--force"], cwd=tmp_path)
+    assert result.returncode == 0
+    assert (tmp_path / ".env.example").read_text() != "API_KEY=your_api_key_here\n"

@@ -169,6 +169,11 @@ def cmd_sync(args: argparse.Namespace) -> int:
         return 1
 
     env = EnvFile.load(env_path)
+    if not len(env) and not getattr(args, "force", False):
+        ui.warn(f"{env_path} has no KEY=value pairs; leaving {example_path} untouched.")
+        ui.detail("Add keys first, or pass --force to overwrite the template anyway.")
+        return 1
+
     header = "" if args.no_header else SYNC_HEADER
     rendered = env.render_placeholders(header=header)
 
@@ -1278,6 +1283,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync.add_argument(
         "--no-header", action="store_true",
         help="Skip the auto-generated header comment",
+    )
+    p_sync.add_argument(
+        "--force", action="store_true",
+        help="Overwrite the template even when .env has no keys",
     )
     p_sync.set_defaults(func=cmd_sync)
 
