@@ -20,6 +20,7 @@ import json
 
 from . import audit as audit_mod
 from . import badge as badge_mod
+from . import cicd
 from . import config as config_mod
 from . import hooks as hooks_mod
 from . import merge as merge_mod
@@ -46,13 +47,27 @@ _KV_RE = re.compile(r"""^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*
 # ----------------------------------------------------------------------
 
 def cmd_check(args: argparse.Namespace) -> int:
+    if getattr(args, "format", "text") == "json":
+        ui.quiet = True  # keep stdout machine-readable
     env_path = Path(args.env)
     example_path = Path(args.example)
 
-    env_vars = parse_env_file(env_path)
-    example_vars = parse_env_file(example_path)
+    env = EnvFile.load(env_path)
+    example = EnvFile.load(example_path)
+    env_vars, example_vars = env.values(), example.values()
 
     exit_code = 0
+    warnings = 0
+    report_data = {
+        "env": str(env_path),
+        "example": str(example_path),
+        "missing_in_example": [],
+        "missing_in_env": [],
+        "suspicious_example": [],
+        "duplicates": {},
+        "empty_values": [],
+        "gitignored": True,
+    }
 
     if not env_path.exists():
         ui.warn(f"{env_path} not found (nothing to compare against).")
@@ -61,21 +76,50 @@ def cmd_check(args: argparse.Namespace) -> int:
         exit_code = 1
 
     missing_in_example = sorted(set(env_vars) - set(example_vars))
-    missing_in_env = sorted(set(example_vars) - set(env_vars))
+    missing_in_env = sorted(set(example_vars) - set(env_vars)) if env_path.exists() else []
+    report_data["missing_in_example"] = missing_in_example
+    report_data["missing_in_env"] = missing_in_env
 
     if missing_in_example:
         exit_code = 1
         ui.error(f"Keys in {env_path} but missing from {example_path}:")
         for key in missing_in_example:
             ui.bullet(key, "red")
+        ui.detail("Run `env-sentry sync` to add them to the template.")
 
     if missing_in_env:
+        warnings += 1
         ui.info(f"Keys in {example_path} but not set in {env_path}:")
         for key in missing_in_env:
             ui.bullet(key)
+        ui.detail("Add them to your .env, or run `env-sentry merge "
+                  f"{example_path} {env_path}`.")
+        if args.strict:
+            exit_code = 1
+
+    # Duplicate keys silently override each other.
+    duplicates = env.duplicates()
+    report_data["duplicates"] = duplicates
+    if duplicates:
+        warnings += 1
+        ui.warn(f"Duplicate keys in {env_path} (the last value wins):")
+        for key, lines in duplicates.items():
+            ui.bullet(f"{key} — lines {', '.join(str(line) for line in lines)}", "yellow")
+        if args.strict:
+            exit_code = 1
+
+    # Keys defined but left empty: a classic "why is my app using defaults" bug.
+    empty = env.empty_keys()
+    report_data["empty_values"] = empty
+    if empty:
+        warnings += 1
+        ui.warn(f"{len(empty)} key(s) in {env_path} have no value:")
+        for key in empty:
+            ui.bullet(key, "yellow")
 
     # Warn if .env.example contains what looks like a real secret
-    suspicious = [k for k, v in example_vars.items() if looks_like_secret(k, v)]
+    suspicious = [key for key, value in example_vars.items() if looks_like_secret(key, value)]
+    report_data["suspicious_example"] = suspicious
     if suspicious:
         exit_code = 1
         ui.error(f"{example_path} may contain REAL secret values, not placeholders:")
@@ -85,9 +129,20 @@ def cmd_check(args: argparse.Namespace) -> int:
 
     # Warn if the env file is not gitignored
     if not is_gitignored_path(env_path):
+        report_data["gitignored"] = False
         exit_code = 1
         ui.error(f"'{env_path.name}' does not appear to be listed in .gitignore!")
         ui.detail("Anyone who commits will leak real secrets. Run `env-sentry init` to fix this.")
+
+    if args.strict and warnings and exit_code == 0:
+        ui.error("Strict mode: warnings are treated as failures.")
+        exit_code = 1
+
+    if args.format == "json":
+        payload = dict(report_data)
+        payload["exit_code"] = exit_code
+        ui.write(json.dumps(payload, indent=2), force=True)
+        return exit_code
 
     if exit_code == 0 and env_path.exists():
         ui.ok(f"{env_path} and {example_path} are in sync. {env_path.name} is git-ignored. Looking good.")
@@ -818,6 +873,26 @@ def cmd_config(args: argparse.Namespace) -> int:
 
 
 # ----------------------------------------------------------------------
+# ci scaffolding
+# ----------------------------------------------------------------------
+
+def cmd_ci(args: argparse.Namespace) -> int:
+    if args.write:
+        try:
+            target = cicd.write(args.provider, args.output, force=args.force)
+        except FileExistsError as exc:
+            ui.error(str(exc))
+            return 1
+        ui.ok(f"Wrote {args.provider} configuration to {target}")
+        ui.detail("Commit it, then push — secrets are now checked on every run.")
+        return 0
+
+    ui.write(cicd.render(args.provider), force=True)
+    ui.detail(f"Suggested location: {cicd.DEFAULT_PATHS[args.provider]}")
+    return 0
+
+
+# ----------------------------------------------------------------------
 # entrypoint
 # ----------------------------------------------------------------------
 
@@ -866,6 +941,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_check.add_argument(
         "--example", default=".env.example",
         help="Path to the example/template file to compare against (default: .env.example)",
+    )
+    p_check.add_argument(
+        "--strict", "--ci", dest="strict", action="store_true",
+        help="Also fail on warnings (missing local keys, duplicates) — use in CI",
+    )
+    p_check.add_argument(
+        "--format", choices=["text", "json"], default="text",
+        help="Output format (default: text)",
     )
     p_check.set_defaults(func=cmd_check)
 
@@ -1157,6 +1240,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_config.add_argument("--format", choices=["text", "json"], default="text",
                           help="Output format (default: text)")
     p_config.set_defaults(func=cmd_config)
+
+    p_ci = subparsers.add_parser(
+        "ci",
+        help="Print or write a CI config that runs env-sentry",
+        description="Generate a GitHub Actions workflow (with SARIF upload), a "
+        "GitLab CI job or a pre-commit config entry.",
+    )
+    p_ci.add_argument("--provider", choices=list(cicd.PROVIDERS), default="github",
+                      help="CI provider (default: github)")
+    p_ci.add_argument("--write", action="store_true",
+                      help="Write the file instead of printing it")
+    p_ci.add_argument("--output", "-o", default="", help="Custom output path")
+    p_ci.add_argument("--force", action="store_true", help="Overwrite an existing file")
+    p_ci.set_defaults(func=cmd_ci)
 
     return parser
 
