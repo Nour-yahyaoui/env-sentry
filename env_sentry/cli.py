@@ -23,6 +23,7 @@ from . import badge as badge_mod
 from . import cicd
 from . import completions as completions_mod
 from . import config as config_mod
+from . import history as history_mod
 from . import hooks as hooks_mod
 from . import merge as merge_mod
 from . import stats as stats_mod
@@ -1009,6 +1010,64 @@ def cmd_completions(args: argparse.Namespace) -> int:
 
 
 # ----------------------------------------------------------------------
+# git history scan
+# ----------------------------------------------------------------------
+
+def cmd_history(args: argparse.Namespace) -> int:
+    root = Path(args.path)
+    if not history_mod.is_repo(root):
+        ui.error("Not inside a git repository.")
+        return 2
+
+    allowlist = _load_allowlist(root, getattr(args, "allowlist", ""))
+    findings = history_mod.scan_history(
+        root,
+        depth=args.depth,
+        allowlist=allowlist,
+        min_severity=args.min_severity,
+        include_all_files=args.all_files,
+    )
+
+    files = history_mod.env_files_in_history(root, depth=max(args.depth, 50))
+
+    if args.format == "json":
+        payload = json.dumps({
+            "depth": args.depth,
+            "env_files_in_history": files,
+            "findings": [finding.to_dict() for finding in findings],
+        }, indent=2)
+        if args.output:
+            Path(args.output).write_text(payload + "\n")
+            ui.ok(f"Wrote history scan to {args.output}")
+        else:
+            ui.write(payload, force=True)
+    else:
+        if args.list_files:
+            if files:
+                ui.warn("Env-like files that were committed at some point:")
+                for name in files:
+                    ui.bullet(name, "yellow")
+            else:
+                ui.ok("No env/credential files found in the scanned history.")
+        for finding in findings:
+            colour = "red" if finding.severity == detect.CRITICAL else "yellow"
+            ui.write(
+                f"{ui.paint(finding.commit, 'cyan')}  {finding.date}  "
+                f"{finding.path}:{finding.line}  {ui.paint(finding.rule, colour)}  "
+                f"{ui.paint('(' + finding.author + ')', 'grey')}"
+            )
+        if findings:
+            ui.error(f"{len(findings)} secret(s) found in git history.")
+            ui.detail("Rotate the credentials — they are recoverable with `git show`.")
+        else:
+            ui.ok(f"No secrets found in the last {args.depth} commits.")
+
+    if findings:
+        return 1
+    return 0
+
+
+# ----------------------------------------------------------------------
 # entrypoint
 # ----------------------------------------------------------------------
 
@@ -1423,6 +1482,29 @@ def build_parser() -> argparse.ArgumentParser:
     p_comp.add_argument("--output", "-o", default="",
                         help="Write the script to a file instead of stdout")
     p_comp.set_defaults(func=cmd_completions)
+
+    p_history = subparsers.add_parser(
+        "history",
+        help="Scan git history for secrets that were committed",
+        description="Replay the added lines of recent commits through the "
+        "detection engine. Deleting a secret from .env does not delete it "
+        "from history — this finds what is still recoverable.",
+    )
+    p_history.add_argument("path", nargs="?", default=".", help="Repository path (default: .)")
+    p_history.add_argument("--depth", type=int, default=100,
+                           help="How many commits to scan (default: 100)")
+    p_history.add_argument("--min-severity", default=detect.HIGH,
+                           choices=[detect.LOW, detect.MEDIUM, detect.HIGH, detect.CRITICAL],
+                           help="Minimum severity to report (default: high)")
+    p_history.add_argument("--all-files", action="store_true",
+                           help="Scan every file, not just env/credential-looking ones")
+    p_history.add_argument("--list-files", action="store_true",
+                           help="List env-like files that were committed at some point")
+    p_history.add_argument("--allowlist", default="", help="Allowlist file")
+    p_history.add_argument("--format", choices=["text", "json"], default="text",
+                           help="Output format (default: text)")
+    p_history.add_argument("--output", "-o", default="", help="Write results to a file")
+    p_history.set_defaults(func=cmd_history)
 
     return parser
 
