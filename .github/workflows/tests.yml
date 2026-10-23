@@ -16,5 +16,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -e . pytest
+      - run: pip install -e . pytest flake8
+      - run: flake8 env_sentry --max-line-length=120 --select=F,E9
       - run: pytest tests/ -v
