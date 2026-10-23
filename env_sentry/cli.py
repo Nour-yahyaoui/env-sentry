@@ -34,7 +34,7 @@ from . import detect, diffing, exporters, gensecrets, lint, report, usage as usa
 from .detect import AllowList, Finding, looks_like_secret
 from .envfile import EnvFile, is_placeholder, parse_env_file
 from .gitignore import GitIgnore
-from .scanner import DEFAULT_IGNORE_DIRS
+from .scanner import DEFAULT_IGNORE_DIRS, staged_files
 from .ui import UI, ui
 
 VERSION = "0.1.4"
@@ -328,13 +328,22 @@ def cmd_scan(args: argparse.Namespace) -> int:
         return 1
 
     allowlist = _load_allowlist(root, getattr(args, "allowlist", ""))
-    findings = detect.scan_path(
-        root,
-        allowlist=allowlist,
-        min_severity=args.min_severity,
-        extensions=[e.strip() for e in args.extensions.split(",") if e.strip()] or None,
-        exclude=[e.strip() for e in args.exclude.split(",") if e.strip()],
-    )
+
+    if getattr(args, "staged", False):
+        paths = staged_files(root)
+        if not paths:
+            ui.ok("Nothing staged to scan.")
+            return 0
+        findings = detect.scan_files(paths, allowlist=allowlist,
+                                     min_severity=args.min_severity)
+    else:
+        findings = detect.scan_path(
+            root,
+            allowlist=allowlist,
+            min_severity=args.min_severity,
+            extensions=[e.strip() for e in args.extensions.split(",") if e.strip()] or None,
+            exclude=[e.strip() for e in args.exclude.split(",") if e.strip()],
+        )
     findings.sort(key=lambda finding: finding.sort_key())
 
     output = getattr(args, "output", "") or ""
@@ -1268,6 +1277,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_scan.add_argument(
         "--exclude", default="",
         help="Comma-separated glob patterns to skip, e.g. 'tests/*,docs/*'",
+    )
+    p_scan.add_argument(
+        "--staged", action="store_true",
+        help="Only scan files staged for commit (fast pre-commit mode)",
     )
     p_scan.add_argument(
         "--extensions", default="",

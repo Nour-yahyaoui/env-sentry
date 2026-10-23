@@ -71,6 +71,30 @@ def is_scannable(path: Path, extensions: Optional[Sequence[str]] = None) -> bool
     }
 
 
+def staged_files(root: Path) -> List[Path]:
+    """Files staged for commit (added/copied/modified), relative to ``root``."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
+            cwd=str(root), capture_output=True, text=True, timeout=20,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode != 0:
+        return []
+    paths = []
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        candidate = Path(root) / line
+        if candidate.is_file() and not any(part in DEFAULT_IGNORE_DIRS for part in candidate.parts):
+            paths.append(candidate)
+    return paths
+
+
 def iter_files(
     root: Path,
     extensions: Optional[Sequence[str]] = None,

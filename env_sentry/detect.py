@@ -401,6 +401,18 @@ def scan_file(path: Path, allowlist: Optional[AllowList] = None) -> List[Finding
     return scan_text(text, path=str(path), is_env_file=is_env, allowlist=allowlist)
 
 
+def scan_files(paths: Iterable[Path], allowlist: Optional[AllowList] = None,
+               min_severity: str = LOW) -> List[Finding]:
+    """Scan an explicit list of files (used by --staged)."""
+    threshold = SEVERITY_RANK.get(min_severity, 0)
+    findings: List[Finding] = []
+    for path in paths:
+        for finding in scan_file(Path(path), allowlist=allowlist):
+            if SEVERITY_RANK.get(finding.severity, 0) >= threshold:
+                findings.append(finding)
+    return findings
+
+
 def scan_path(root: Path, allowlist: Optional[AllowList] = None,
               min_severity: str = LOW, extensions: Optional[Sequence[str]] = None,
               exclude: Sequence[str] = ()) -> List[Finding]:
